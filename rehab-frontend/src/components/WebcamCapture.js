@@ -1,57 +1,57 @@
-import React, { useRef, useState } from 'react';
-import Webcam from 'react-webcam';
+import React, { useEffect, useState } from 'react';
+import axios from 'axios';
 
 const WebcamCapture = () => {
-  const webcamRef = useRef(null);
-  const [capturedImage, setCapturedImage] = useState(null);
+  const [keypoints, setKeypoints] = useState([]);
+  const videoFeedUrl = "http://127.0.0.1:8000/video_feed";
 
-  const capture = () => {
-    const imageSrc = webcamRef.current.getScreenshot();
-    setCapturedImage(imageSrc); // Set the captured image
-  };
+  useEffect(() => {
+    const fetchKeypoints = async () => {
+      try {
+        const response = await axios.get("http://127.0.0.1:8000/keypoints");
+        setKeypoints(response.data.keypoints || []);
+      } catch (error) {
+        console.error("Error fetching keypoints:", error);
+      }
+    };
 
-  const videoConstraints = {
-    width: 500,
-    height: 200,
-    facingMode: "user"
-  };
+    const intervalId = setInterval(fetchKeypoints, 500); // Fetch every 500ms
+    return () => clearInterval(intervalId);
+  }, []);
 
   return (
-    <div style={webcamContainerStyle}>
-      <h2>Webcam Feed</h2>
-      <Webcam
-        audio={false}
-        ref={webcamRef}
-        screenshotFormat="image/jpeg"
-        videoConstraints={videoConstraints}
-      />
-      <button onClick={capture} style={buttonStyle}>Capture</button>
-      {capturedImage && (
-        <div style={{ marginTop: '20px' }}>
-          <h3>Captured Image:</h3>
-          <img src={capturedImage} alt="Captured" />
-        </div>
-      )}
+    <div style={containerStyle}>
+      <h2>Pose Estimation</h2>
+      <img src={videoFeedUrl} alt="Video Feed" style={videoStyle} />
+      <div>
+        <h3>Keypoints:</h3>
+        <pre style={keypointsStyle}>{JSON.stringify(keypoints, null, 2)}</pre>
+      </div>
     </div>
   );
 };
 
-const webcamContainerStyle = {
+const containerStyle = {
   display: 'flex',
   flexDirection: 'column',
   alignItems: 'center',
-  border: '2px solid #ddd',
   padding: '20px',
-  margin: '10px',
 };
 
-const buttonStyle = {
-  marginTop: '10px',
+const videoStyle = {
+  width: "100%",
+  maxHeight: "400px",
+  borderRadius: "10px"
+};
+
+const keypointsStyle = {
+  textAlign: 'left',
+  background: '#f4f4f4',
   padding: '10px',
-  backgroundColor: '#282c34',
-  color: 'white',
-  border: 'none',
-  cursor: 'pointer'
+  borderRadius: '5px',
+  maxHeight: '300px',
+  overflow: 'auto',
+  width: '80%',
 };
 
 export default WebcamCapture;
