@@ -1,10 +1,17 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, StreamingResponse
+from pymongo import MongoClient
 import cv2
 import mediapipe as mp
-import numpy as np
+import datetime
 
 app = FastAPI()
+
+# MongoDB Connection
+MONGO_URI = "mongodb+srv://livio:Zuerich578@cluster0.axdzry5.mongodb.net/test"
+client = MongoClient(MONGO_URI)
+db = client["bt_poseguardian"]
+collection = db["data"]
 
 # Initialize MediaPipe Pose
 mp_pose = mp.solutions.pose
@@ -34,7 +41,14 @@ async def get_keypoints():
                 "z": landmark.z
             })
 
-    return {"keypoints": keypoints}
+    # Save to MongoDB
+    document = {
+        "timestamp": datetime.datetime.utcnow(),
+        "keypoints": keypoints
+    }
+    #collection.insert_one(document)
+
+    return {"message": "Keypoints saved", "keypoints": keypoints}
 
 @app.get("/video_feed")
 async def video_feed():
@@ -63,6 +77,7 @@ async def video_feed():
 @app.on_event("shutdown")
 def shutdown_event():
     cap.release()
+    client.close()  # Close MongoDB connection
 
 if __name__ == "__main__":
     import uvicorn

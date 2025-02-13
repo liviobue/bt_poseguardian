@@ -15,14 +15,20 @@ const WebcamCapture = () => {
       }
     };
 
-    const intervalId = setInterval(fetchKeypoints, 500); // Fetch every 500ms
+    const intervalId = setInterval(fetchKeypoints, 2000); // Fetch every 500ms
     return () => clearInterval(intervalId);
   }, []);
 
   return (
     <div style={containerStyle}>
       <h2>Pose Estimation</h2>
-      <img src={videoFeedUrl} alt="Video Feed" style={videoStyle} />
+      
+      {/* Webcam Video Feed */}
+      <div style={videoContainerStyle}>
+        <img src={videoFeedUrl} alt="Video Feed" style={videoStyle} />
+      </div>
+
+      {/* Keypoints Data */}
       <div>
         <h3>Keypoints:</h3>
         <pre style={keypointsStyle}>{JSON.stringify(keypoints, null, 2)}</pre>
@@ -38,10 +44,18 @@ const containerStyle = {
   padding: '20px',
 };
 
+const videoContainerStyle = {
+  width: "80%",
+  display: "flex",
+  justifyContent: "center",
+  marginBottom: "20px",
+};
+
 const videoStyle = {
   width: "100%",
   maxHeight: "400px",
-  borderRadius: "10px"
+  borderRadius: "10px",
+  border: "2px solid #333"
 };
 
 const keypointsStyle = {
