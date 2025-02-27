@@ -5,3 +5,10 @@ mediapipe
 numpy
 pymongo
 dnspython
+#MoveNet
+tensorflow
+tensorflow-hub
+#DINO
+torch
+torchvision
+timm
