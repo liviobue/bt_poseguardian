@@ -1,21 +1,25 @@
-import torch
-import torchvision.transforms as transforms
-from PIL import Image
-import cv2
-import numpy as np
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+import torch
+import cv2
+import numpy as np
+import torchvision.transforms as T
+from PIL import Image
 from pymongo import MongoClient
 import datetime
-import timm  # DINO ist in timm verfügbar
+from transformers import ViTModel, AutoImageProcessor
 
-# Initialisiere FastAPI
+# Load DINO Model
+model_name = "facebook/dino-vits16"
+processor = AutoImageProcessor.from_pretrained(model_name)
+model = ViTModel.from_pretrained(model_name)  # Use ViTModel instead of DINOModel
+
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Change to ["http://localhost:3000"] for security
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -27,38 +31,26 @@ client = MongoClient(MONGO_URI)
 db = client["bt_poseguardian"]
 collection = db["data"]
 
-# Lade das DINO Model
-model = torch.hub.load('facebookresearch/dino:main', 'dino_vits8')
-model.eval()
+cap = cv2.VideoCapture(0)  # Open webcam
 
-# OpenCV Webcam
-cap = cv2.VideoCapture(0)
-
-# Transformation für das Modell
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-])
-
+def extract_features(frame):
+    """Extracts features from a video frame using DINO."""
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    image = Image.fromarray(frame_rgb)
+    inputs = processor(images=image, return_tensors="pt")
+    with torch.no_grad():
+        outputs = model(**inputs)
+    features = outputs.last_hidden_state.squeeze(0).cpu().numpy()
+    return features.tolist()
 
 @app.get("/keypoints")
 async def get_keypoints():
     ret, frame = cap.read()
     if not ret:
-        return JSONResponse(content={"error": "Unable to access webcam"}, status_code=500)
+        raise HTTPException(status_code=500, detail="Unable to access webcam")
 
-    # OpenCV Bild in PIL umwandeln
-    img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-    img_tensor = transform(img).unsqueeze(0)
-
-    with torch.no_grad():
-        output = model(img_tensor)
-
-    # Extrahiere Merkmale aus dem letzten Layer (du kannst es optimieren)
-    keypoints = output.squeeze().tolist()[:10]  # Hier nehme ich einfach die ersten 10 Werte als Beispiel
-
-    # Speichere Keypoints in MongoDB
+    keypoints = extract_features(frame)
+    
     document = {
         "timestamp": datetime.datetime.utcnow(),
         "keypoints": keypoints
@@ -67,7 +59,6 @@ async def get_keypoints():
 
     return {"message": "Keypoints saved", "keypoints": keypoints}
 
-
 @app.get("/video_feed")
 async def video_feed():
     def generate_frames():
@@ -75,20 +66,22 @@ async def video_feed():
             ret, frame = cap.read()
             if not ret:
                 break
-
-            # Encode frame als JPEG
+            
+            keypoints = extract_features(frame)
+            for point in keypoints[:10]:  # Visualizing some keypoints
+                x, y = int(point[0] * frame.shape[1]), int(point[1] * frame.shape[0])
+                cv2.circle(frame, (x, y), 5, (0, 255, 0), -1)
+            
             _, buffer = cv2.imencode('.jpg', frame)
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-
+    
     return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
-
 
 @app.on_event("shutdown")
 def shutdown_event():
     cap.release()
-    client.close()  # MongoDB schließen
-
+    client.close()
 
 if __name__ == "__main__":
     import uvicorn

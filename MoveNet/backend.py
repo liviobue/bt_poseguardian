@@ -27,9 +27,8 @@ cap = cv2.VideoCapture(0)
 def detect_keypoints(frame):
     """ Runs MoveNet on a given frame and returns keypoints """
     img = cv2.resize(frame, (192, 192))  # Resize to 192x192
-    img = img.astype(np.float32) / 255.0  # Normalize pixel values
+    img = np.asarray(img, dtype=np.int32)  # Ensure int32 dtype
     img = np.expand_dims(img, axis=0)  # Add batch dimension
-    img = np.expand_dims(img, axis=-1)  # Add channel dimension if grayscale
 
     # Run MoveNet model
     outputs = movenet.signatures["serving_default"](tf.constant(img))
