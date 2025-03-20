@@ -5,6 +5,7 @@ from pymongo import MongoClient
 import cv2
 import mediapipe as mp
 import datetime
+import numpy as np
 
 app = FastAPI()
 
@@ -20,14 +21,31 @@ app.add_middleware(
 MONGO_URI = "mongodb+srv://livio:Zuerich578@cluster0.axdzry5.mongodb.net/test"
 client = MongoClient(MONGO_URI)
 db = client["bt_poseguardian"]
-collection = db["data"]
+collection = db["data"]  
 
-# Initialize MediaPipe Pose
-mp_pose = mp.solutions.pose
+# Initialize MediaPipe Hands
+mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
-pose = mp_pose.Pose()
+hands = mp_hands.Hands(static_image_mode=False, max_num_hands=2, min_detection_confidence=0.5)
 
 cap = cv2.VideoCapture(0)  # Open webcam
+
+def is_hand_open(hand_landmarks):
+    """Detects if the hand is fully open by checking if all fingers are straight."""
+    
+    # Define landmark indices for fingertips and base joints
+    FINGERTIPS = [8, 12, 16, 20]  # Index, Middle, Ring, Pinky
+    BASE_JOINTS = [6, 10, 14, 18]  # Joints before fingertips
+    
+    for tip, base in zip(FINGERTIPS, BASE_JOINTS):
+        tip_y = hand_landmarks.landmark[tip].y
+        base_y = hand_landmarks.landmark[base].y
+        
+        # If any fingertip is lower (higher Y) than its base, the hand is not open
+        if tip_y > base_y:
+            return False
+
+    return True  # All fingers are extended
 
 @app.get("/keypoints")
 async def get_keypoints():
@@ -37,27 +55,37 @@ async def get_keypoints():
 
     # Convert frame to RGB
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    result = pose.process(rgb_frame)
+    result = hands.process(rgb_frame)
 
-    # Extract keypoints
     keypoints = []
-    if result.pose_landmarks:
-        for i, landmark in enumerate(result.pose_landmarks.landmark):
-            keypoints.append({
-                "id": i,
-                "x": landmark.x,
-                "y": landmark.y,
-                "z": landmark.z
-            })
+    recognized = False
+
+    if result.multi_hand_landmarks:
+        for hand_landmarks in result.multi_hand_landmarks:
+            hand_keypoints = []
+            for i, landmark in enumerate(hand_landmarks.landmark):
+                hand_keypoints.append({
+                    "id": i,
+                    "x": landmark.x,
+                    "y": landmark.y,
+                    "z": landmark.z
+                })
+
+            keypoints.append({"keypoints": hand_keypoints})
+
+            # Check if hand is open
+            if is_hand_open(hand_landmarks):
+                recognized = True
 
     # Save to MongoDB
     document = {
         "timestamp": datetime.datetime.utcnow(),
-        "keypoints": keypoints
+        "hands": keypoints,
+        "recognized": recognized
     }
-    #collection.insert_one(document)
+    # collection.insert_one(document)  # Uncomment to store data
 
-    return {"message": "Keypoints saved", "keypoints": keypoints}
+    return {"recognized": recognized, "hands": keypoints}
 
 @app.get("/video_feed")
 async def video_feed():
@@ -69,11 +97,20 @@ async def video_feed():
 
             # Convert frame to RGB
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = pose.process(rgb_frame)
+            result = hands.process(rgb_frame)
+            recognized = False
 
-            if result.pose_landmarks:
-                mp_drawing.draw_landmarks(
-                    frame, result.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+            if result.multi_hand_landmarks:
+                for hand_landmarks in result.multi_hand_landmarks:
+                    mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+                    
+                    if is_hand_open(hand_landmarks):
+                        recognized = True
+
+            # Overlay text
+            text = "Recognized" if recognized else "Not Recognized"
+            color = (0, 255, 0) if recognized else (0, 0, 255)
+            cv2.putText(frame, text, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
 
             # Encode frame as JPEG
             _, buffer = cv2.imencode('.jpg', frame)
