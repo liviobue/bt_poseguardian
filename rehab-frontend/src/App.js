@@ -1,8 +1,6 @@
 import React from 'react';
 import Header from './components/Header';
 import VideoInput from './components/VideoInput';
-import SensorData from './components/SensorData';
-import ProgressChart from './components/ProgressChart';
 import WebcamCapture from './components/WebcamCapture';
 import './App.css';
 
@@ -13,8 +11,6 @@ function App() {
       <div style={mainContainer}>
         <VideoInput />
         <WebcamCapture />
-        <SensorData />
-        <ProgressChart />
       </div>
     </div>
   );
