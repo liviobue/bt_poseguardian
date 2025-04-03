@@ -8,6 +8,7 @@ import datetime
 import numpy as np
 import tempfile
 import time
+import uuid
 from google.api_core import exceptions as google_exceptions
 import google.generativeai as genai
 import os
@@ -96,12 +97,8 @@ def is_hand_open(hand_landmarks):
 
     return True  # All fingers including thumb are straight
 
-@app.get("/keypoints")
-async def get_keypoints():
-    ret, frame = cap.read()
-    if not ret:
-        return JSONResponse(content={"error": "Unable to access webcam"}, status_code=500)
-
+def extract_hand_keypoints(frame):
+    """Extract hand keypoints from a single frame"""
     # Convert frame to RGB
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     result = hands.process(rgb_frame)
@@ -126,15 +123,102 @@ async def get_keypoints():
             if is_hand_open(hand_landmarks):
                 recognized = True
 
+    return {"recognized": recognized, "hands": keypoints}
+
+def process_video_for_keypoints(video_path, sampling_rate=5):
+    """
+    Process video file and extract hand keypoints at specified sampling rate
+    
+    Args:
+        video_path: Path to the video file
+        sampling_rate: Extract keypoints every N frames
+        
+    Returns:
+        Dictionary with video metadata and frames array
+    """
+    cap = cv2.VideoCapture(video_path)
+    
+    if not cap.isOpened():
+        return None
+    
+    # Video metadata
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    duration = total_frames / fps if fps > 0 else 0
+    
+    # Prepare document structure
+    frames_data = []
+    frame_count = 0
+    hands_detected_count = 0
+    
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+            
+        # Process every Nth frame to improve performance
+        if frame_count % sampling_rate == 0:
+            keypoint_data = extract_hand_keypoints(frame)
+            
+            # Calculate timestamp based on frame number and fps
+            frame_time = frame_count / fps if fps > 0 else 0
+            
+            # Add frame data
+            frame_data = {
+                "frame_number": frame_count,
+                "video_time": frame_time,
+                "hands": keypoint_data["hands"],
+                "recognized": keypoint_data["recognized"]
+            }
+            
+            frames_data.append(frame_data)
+            
+            # Count frames with hands
+            if keypoint_data["hands"]:
+                hands_detected_count += 1
+            
+        frame_count += 1
+    
+    cap.release()
+    
+    # Return full document structure
+    video_data = {
+        "video_id": str(uuid.uuid4()),
+        "timestamp": datetime.datetime.utcnow(),
+        "metadata": {
+            "fps": fps,
+            "total_frames": total_frames,
+            "processed_frames": len(frames_data),
+            "sampling_rate": sampling_rate,
+            "duration": duration,
+            "width": width,
+            "height": height,
+            "hands_detected_count": hands_detected_count
+        },
+        "frames": frames_data
+    }
+    
+    return video_data
+
+@app.get("/keypoints")
+async def get_keypoints():
+    ret, frame = cap.read()
+    if not ret:
+        return JSONResponse(content={"error": "Unable to access webcam"}, status_code=500)
+
+    keypoint_data = extract_hand_keypoints(frame)
+    
     # Save to MongoDB
     document = {
         "timestamp": datetime.datetime.utcnow(),
-        "hands": keypoints,
-        "recognized": recognized
+        "hands": keypoint_data["hands"],
+        "recognized": keypoint_data["recognized"]
     }
     # collection.insert_one(document)  # Uncomment to store data
 
-    return {"recognized": recognized, "hands": keypoints}
+    return keypoint_data
 
 @app.get("/video_feed")
 async def video_feed():
@@ -183,7 +267,30 @@ async def upload_video(video: UploadFile = File(...)):
         tmp_path = tmp.name
 
     try:
-        # Upload to Gemini
+        # Extract keypoints from the video with optimized MongoDB structure
+        video_data = process_video_for_keypoints(tmp_path)
+        
+        # Store in MongoDB if data was extracted
+        mongo_id = None
+        if video_data and video_data["frames"]:
+            result = collection.insert_one(video_data)
+            mongo_id = str(result.inserted_id)
+            
+            keypoints_summary = {
+                "saved": True,
+                "video_id": video_data["video_id"],
+                "mongo_id": mongo_id,
+                "total_frames_processed": len(video_data["frames"]),
+                "frames_with_hands": video_data["metadata"]["hands_detected_count"],
+                "video_duration": video_data["metadata"]["duration"]
+            }
+        else:
+            keypoints_summary = {
+                "saved": False,
+                "reason": "No hand keypoints detected in video"
+            }
+        
+        # Upload to Gemini for analysis
         file_obj = genai.upload_file(path=tmp_path, mime_type=video.content_type)
         
         # Add delay to ensure file is ready
@@ -196,7 +303,11 @@ async def upload_video(video: UploadFile = File(...)):
             generation_config={'max_output_tokens': 2048}
         )
         
-        return {"response": response.text}
+        # Return combined response with Gemini analysis and keypoint summary
+        return {
+            "response": response.text,
+            "keypoints_extraction": keypoints_summary
+        }
         
     except google_exceptions.FailedPrecondition as e:
         return {"response": f"Error: File not ready for processing. Try again later. Details: {str(e)}"}

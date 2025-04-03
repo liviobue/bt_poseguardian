@@ -9,20 +9,33 @@ const VideoInput = () => {
   const mediaRecorderRef = useRef(null);
   const chunks = useRef([]);
 
+  // Create a static API URL with port 8000
+  const API_URL = `${window.location.protocol}//${window.location.hostname}:8000`;
+
   const handleFileChange = (event) => {
     setVideoFile(event.target.files[0]);
   };
 
   const handleUpload = async (file) => {
+    if (!file) return;
+    
     const formData = new FormData();
     formData.append('video', file);
-  
+
     try {
-      const res = await fetch('http://localhost:8000/upload', {
+      // Use the static API_URL with port 8000
+      const res = await fetch(`${API_URL}/upload`, {
         method: 'POST',
         body: formData,
       });
-  
+      
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error('Server returned an error:', res.status, errorText);
+        setResponse(`Server error: ${res.status}`);
+        return;
+      }
+      
       const data = await res.json();
       setResponse(data.response);
     } catch (error) {
@@ -51,7 +64,6 @@ const VideoInput = () => {
       };
 
       mediaRecorderRef.current.start();
-
       // Automatically stop recording after 20 seconds
       setTimeout(() => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {

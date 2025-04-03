@@ -1,7 +1,8 @@
 import React from 'react';
 
 const WebcamCapture = () => {
-  const videoFeedUrl = "http://127.0.0.1:8000/video_feed";
+  // Use static URL with port 8000
+  const videoFeedUrl = `${window.location.protocol}//${window.location.hostname}:8000/video_feed`;
 
   return (
     <div style={containerStyle}>
