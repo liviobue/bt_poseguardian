@@ -2,8 +2,6 @@ from fastapi import FastAPI, UploadFile, Form, File
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pymongo import MongoClient
-import cv2
-import mediapipe as mp
 import datetime
 import numpy as np
 import tempfile
@@ -15,6 +13,10 @@ import google.generativeai as genai
 import os
 from dotenv import load_dotenv
 from config import Config
+import cv2
+
+# Import the gesture recognition module
+from gestures import GestureRecognizer
 
 # Validate config on startup
 try:
@@ -51,81 +53,9 @@ SUPPORTED_MIME_TYPES = [
     #'video/quicktime'
 ]
 
-# Initialize MediaPipe Hands
-mp_hands = mp.solutions.hands
-mp_drawing = mp.solutions.drawing_utils
-hands = mp_hands.Hands(static_image_mode=False, max_num_hands=2, min_detection_confidence=0.5)
-
+# Initialize Gesture Recognizer
+gesture_recognizer = GestureRecognizer()
 cap = cv2.VideoCapture(0)  # Open webcam
-
-def is_hand_open(hand_landmarks):
-    """Checks if all fingers (including thumb) are fully extended (no bending)."""
-    
-    # Landmark indices
-    FINGERTIPS = [4, 8, 12, 16, 20]   # Thumb, Index, Middle, Ring, Pinky
-    MIDDLE_JOINTS = [3, 7, 11, 15, 19] # PIP joints (middle of fingers)
-    BASE_JOINTS = [2, 6, 10, 14, 18]   # MCP joints (base of fingers)
-
-    tolerance = 0.01  # Small allowed deviation for natural variations
-
-    for tip, middle, base in zip(FINGERTIPS, MIDDLE_JOINTS, BASE_JOINTS):
-        tip_y = hand_landmarks.landmark[tip].y
-        middle_y = hand_landmarks.landmark[middle].y
-        base_y = hand_landmarks.landmark[base].y
-
-        # For thumb, we need to check x coordinate instead of y (thumb moves differently)
-        if tip == 4:  # Thumb tip
-            tip_x = hand_landmarks.landmark[tip].x
-            middle_x = hand_landmarks.landmark[middle].x
-            base_x = hand_landmarks.landmark[base].x
-            
-            # Thumb is extended if tip is further out than middle joint (x coordinate)
-            if not (tip_x > middle_x > base_x):
-                return False
-            
-            # Check if thumb is straight
-            expected_middle_x = (tip_x + base_x) / 2
-            if abs(middle_x - expected_middle_x) > tolerance:
-                return False
-        else:
-            # For other fingers, check y coordinate as before
-            if not (tip_y < middle_y < base_y):  
-                return False
-
-            # Ensure fingers are nearly straight
-            expected_middle_y = (tip_y + base_y) / 2
-            if abs(middle_y - expected_middle_y) > tolerance:
-                return False  
-
-    return True  # All fingers including thumb are straight
-
-def extract_hand_keypoints(frame):
-    """Extract hand keypoints from a single frame"""
-    # Convert frame to RGB
-    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    result = hands.process(rgb_frame)
-
-    keypoints = []
-    recognized = False
-
-    if result.multi_hand_landmarks:
-        for hand_landmarks in result.multi_hand_landmarks:
-            hand_keypoints = []
-            for i, landmark in enumerate(hand_landmarks.landmark):
-                hand_keypoints.append({
-                    "id": i,
-                    "x": landmark.x,
-                    "y": landmark.y,
-                    "z": landmark.z
-                })
-
-            keypoints.append({"keypoints": hand_keypoints})
-
-            # Check if hand is fully open
-            if is_hand_open(hand_landmarks):
-                recognized = True
-
-    return {"recognized": recognized, "hands": keypoints}
 
 def process_video_for_keypoints(video_path, sampling_rate=5):
     """
@@ -162,7 +92,7 @@ def process_video_for_keypoints(video_path, sampling_rate=5):
             
         # Process every Nth frame to improve performance
         if frame_count % sampling_rate == 0:
-            keypoint_data = extract_hand_keypoints(frame)
+            keypoint_data = gesture_recognizer.extract_hand_keypoints(frame)
             
             # Calculate timestamp based on frame number and fps
             frame_time = frame_count / fps if fps > 0 else 0
@@ -172,7 +102,8 @@ def process_video_for_keypoints(video_path, sampling_rate=5):
                 "frame_number": frame_count,
                 "video_time": frame_time,
                 "hands": keypoint_data["hands"],
-                "recognized": keypoint_data["recognized"]
+                "recognized": keypoint_data["recognized"],
+                "gestures": keypoint_data["gestures"]
             }
             
             frames_data.append(frame_data)
@@ -228,6 +159,9 @@ def prepare_keypoints_for_gemini(video_data):
         "\n## Frame-by-Frame Keypoint Data:"
     ]
     
+    # Track detected gestures
+    gesture_counts = {}
+    
     # Limit to a reasonable number of frames to not exceed token limits
     frames_to_include = min(30, len(video_data["frames"]))
     step = max(1, len(video_data["frames"]) // frames_to_include)
@@ -240,6 +174,17 @@ def prepare_keypoints_for_gemini(video_data):
         frame_text = [
             f"\nFrame {frame['frame_number']} (Time: {frame['video_time']:.2f}s):"
         ]
+        
+        # Add detected gestures to frame text
+        if "gestures" in frame and frame["gestures"]:
+            frame_text.append(f"  Detected gestures: {', '.join(frame['gestures'])}")
+            
+            # Count gesture occurrences for summary
+            for gesture in frame["gestures"]:
+                if gesture in gesture_counts:
+                    gesture_counts[gesture] += 1
+                else:
+                    gesture_counts[gesture] = 1
         
         if not frame["hands"]:
             frame_text.append("  No hands detected")
@@ -266,11 +211,19 @@ def prepare_keypoints_for_gemini(video_data):
         
         text_data.extend(frame_text)
     
-    # Add summary information about hand movement
+    # Add summary information about hand movement and gestures
     if metadata['hands_detected_count'] > 0:
         text_data.append("\n## Movement Analysis:")
         text_data.append("Hand positions throughout the video can indicate specific exercise patterns.")
-        text_data.append("Please analyze these keypoints to determine potential rehabilitation exercises.")
+        
+        # Add gesture summary if any were detected
+        if gesture_counts:
+            text_data.append("\n## Gesture Summary:")
+            for gesture, count in gesture_counts.items():
+                percentage = (count / frames_to_include) * 100
+                text_data.append(f"  {gesture}: detected in {count} frames ({percentage:.1f}% of analyzed frames)")
+            
+        text_data.append("\nPlease analyze these keypoints to determine potential rehabilitation exercises.")
     
     return "\n".join(text_data)
 
@@ -280,13 +233,14 @@ async def get_keypoints():
     if not ret:
         return JSONResponse(content={"error": "Unable to access webcam"}, status_code=500)
 
-    keypoint_data = extract_hand_keypoints(frame)
+    keypoint_data = gesture_recognizer.extract_hand_keypoints(frame)
     
     # Save to MongoDB
     document = {
         "timestamp": datetime.datetime.utcnow(),
         "hands": keypoint_data["hands"],
-        "recognized": keypoint_data["recognized"]
+        "recognized": keypoint_data["recognized"],
+        "gestures": keypoint_data["gestures"]
     }
     # collection.insert_one(document)  # Uncomment to store data
 
@@ -295,28 +249,18 @@ async def get_keypoints():
 @app.get("/video_feed")
 async def video_feed():
     def generate_frames():
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            # Convert frame to RGB
-            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = hands.process(rgb_frame)
-            recognized = False
-
-            if result.multi_hand_landmarks:
-                for hand_landmarks in result.multi_hand_landmarks:
-                    mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-                    
-                    if is_hand_open(hand_landmarks):
-                        recognized = True
-
+        for frame, gestures in gesture_recognizer.process_video(cap):
             # Overlay text
-            text = "Recognized" if recognized else "Not Recognized"
+            recognized = len(gestures) > 0
+            status_text = "Recognized" if recognized else "Not Recognized"
             color = (0, 255, 0) if recognized else (0, 0, 255)
-            cv2.putText(frame, text, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
-
+            cv2.putText(frame, status_text, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
+            
+            # Add detected gesture names
+            if gestures:
+                gesture_text = ", ".join(gestures)
+                cv2.putText(frame, gesture_text, (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
+            
             # Encode frame as JPEG
             _, buffer = cv2.imencode('.jpg', frame)
             yield (b'--frame\r\n'
@@ -421,6 +365,7 @@ async def upload_video(video: UploadFile = File(...)):
 @app.on_event("shutdown")
 def shutdown_event():
     cap.release()
+    gesture_recognizer.close()
     client.close()
 
 if __name__ == "__main__":
