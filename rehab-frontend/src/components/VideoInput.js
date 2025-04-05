@@ -3,7 +3,7 @@ import ResponseDisplay from './ResponseDisplay';
 
 const VideoInput = () => {
   const [videoFile, setVideoFile] = useState(null);
-  const [response, setResponse] = useState('');
+  const [response, setResponse] = useState(null);
   const [isRecording, setIsRecording] = useState(false);
   const videoRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -37,7 +37,7 @@ const VideoInput = () => {
       }
       
       const data = await res.json();
-      setResponse(data.response);
+      setResponse(data);
     } catch (error) {
       console.error('Error uploading video:', error);
       setResponse('Error processing video.');
