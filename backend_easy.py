@@ -14,6 +14,8 @@ import os
 from dotenv import load_dotenv
 from config import Config
 import cv2
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Import the gesture recognition module
 from gestures import GestureRecognizer
@@ -44,8 +46,9 @@ collection = db["data"]
 
 # Google API Connection
 genai.configure(api_key=Config.GOOGLE_API_KEY)
-VIDEO_PROMPT = "Analyze this video for rehabilitation movements. Short answer"
-KEYPOINTS_PROMPT = "Analyze these hand keypoints data for rehabilitation movements. The data shows hand positions across multiple frames of a video. Based on the keypoint movements, what rehabilitation exercises might the person be performing?  Short answer"
+# Update these variables at the top where they're defined
+VIDEO_PROMPT = "Analyze this rehabilitation exercise video. Identify specific movements, potential therapeutic applications, and exercise type. Focus on hand movements if visible. Do not use any Markdown formatting like bold, italics, or bullet points. Reply in plain text only."
+KEYPOINTS_PROMPT = "Analyze these hand keypoints data for rehabilitation exercises. Based on the movement patterns, identify the specific exercise type, therapeutic applications, and key movement characteristics. Do not use any Markdown formatting like bold, italics, or bullet points. Reply in plain text only."
 MAX_FILE_SIZE = 20 * 1024 * 1024
 SUPPORTED_MIME_TYPES = [
     'video/mp4',
@@ -56,6 +59,34 @@ SUPPORTED_MIME_TYPES = [
 # Initialize Gesture Recognizer
 gesture_recognizer = GestureRecognizer()
 cap = cv2.VideoCapture(0)  # Open webcam
+
+def calculate_similarity(text1, text2):
+    """
+    Calculate cosine similarity between two text strings
+    
+    Args:
+        text1: First text string
+        text2: Second text string
+        
+    Returns:
+        Similarity score between 0 and 1
+    """
+    if not text1 or not text2:
+        return 0.0
+        
+    # Create TF-IDF vectorizer
+    vectorizer = TfidfVectorizer()
+    
+    try:
+        # Create TF-IDF features
+        tfidf_matrix = vectorizer.fit_transform([text1, text2])
+        
+        # Calculate cosine similarity
+        similarity = cosine_similarity(tfidf_matrix[0:1], tfidf_matrix[1:2])[0][0]
+        return float(similarity)
+    except Exception as e:
+        print(f"Error calculating similarity: {str(e)}")
+        return 0.0
 
 def process_video_for_keypoints(video_path, sampling_rate=5):
     """
@@ -316,6 +347,10 @@ async def upload_video(video: UploadFile = File(...)):
         
         # Get Gemini model
         model = genai.GenerativeModel('gemini-1.5-flash')
+
+        # Store prompts for sending to frontend
+        full_video_prompt = VIDEO_PROMPT
+        full_keypoints_prompt = f"{KEYPOINTS_PROMPT}\n\n{keypoints_text}" if keypoints_text else KEYPOINTS_PROMPT
         
         # 1. Analyze video with Gemini
         try:
@@ -342,11 +377,18 @@ async def upload_video(video: UploadFile = File(...)):
         except Exception as e:
             keypoints_analysis = f"Error analyzing keypoints: {str(e)}"
         
-        # Return combined response with both analyses
+         # Calculate similarity score
+        similarity_score = calculate_similarity(video_analysis, keypoints_analysis)
+
+        # Return combined response with both analyses, similarity score, and prompts
         return {
             "video_analysis": video_analysis,
             "keypoints_analysis": keypoints_analysis,
-            #"keypoints_extraction": keypoints_summary
+            "similarity_score": round(similarity_score * 100, 2),
+            "prompts": {
+                "video_prompt": full_video_prompt,
+                "keypoints_prompt": full_keypoints_prompt
+            }
         }
         
     except google_exceptions.FailedPrecondition as e:
