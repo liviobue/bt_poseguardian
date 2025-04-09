@@ -10,6 +10,7 @@ from collections import deque
 import time
 from typing import Dict
 import uuid
+import asyncio
 
 app = FastAPI()
 
@@ -35,7 +36,7 @@ hands = mp_hands.Hands(static_image_mode=False, max_num_hands=2, min_detection_c
 cap = cv2.VideoCapture(0)
 
 # Define the correct sequence: Index → Middle → Ring → Pinky
-CORRECT_SEQUENCE = [8, 12, 16, 20, 16, 12, 8]
+CORRECT_SEQUENCE = [8, 12, 16, 20]
 SEQUENCE_TIMEOUT = 2.0  # seconds to complete the full sequence
 TOUCH_THRESHOLD = 0.05  # Distance threshold for touch detection
 MIN_FRAMES_FOR_DETECTION = 5
@@ -53,7 +54,7 @@ class GestureTracker:
         """Stores thumb & finger positions in a buffer for tracking gestures."""
         thumb_tip = hand_landmarks.landmark[4]
         fingers = [hand_landmarks.landmark[i] for i in CORRECT_SEQUENCE]
-
+        
         hand_state = {
             "thumb": (thumb_tip.x, thumb_tip.y),
             "fingers": [(f.x, f.y) for f in fingers],
@@ -150,6 +151,12 @@ async def get_keypoints(request: Request):
 
             keypoints.append({"keypoints": hand_keypoints})
             tracker.update_hand_history(hand_landmarks)
+            # 👇 Add the debug distance overlay here
+            thumb_tip = hand_landmarks.landmark[4]
+            fingers = [hand_landmarks.landmark[i] for i in CORRECT_SEQUENCE]
+            for i, finger_pos in enumerate(fingers):
+                distance = np.linalg.norm(np.array([thumb_tip.x, thumb_tip.y]) - np.array([finger_pos.x, finger_pos.y]))
+                cv2.putText(frame, f"{distance:.2f}", (int(finger_pos.x * frame.shape[1]), int(finger_pos.y * frame.shape[0])), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255,255,255), 1)
             
             if is_hand_open(hand_landmarks):
                 recognized = True
@@ -230,7 +237,6 @@ async def cleanup_sessions():
 # Start cleanup task on app startup
 @app.on_event("startup")
 async def startup_event():
-    import asyncio
     asyncio.create_task(cleanup_sessions())
 
 @app.on_event("shutdown")
