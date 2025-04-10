@@ -20,3 +20,4 @@ pydantic
 
 # Utility packages
 uuid
+scikit-learn
