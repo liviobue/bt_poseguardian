@@ -46,7 +46,7 @@ collection = db["data"]
 
 # Google API Connection
 genai.configure(api_key=Config.GOOGLE_API_KEY)
-
+# Update these variables at the top where they're defined
 VIDEO_PROMPT = "Analyze this rehabilitation exercise video. Identify specific movements, potential therapeutic applications, and exercise type. Focus on hand movements if visible. Do not use any Markdown formatting like bold, italics, or bullet points. Reply in plain text only."
 KEYPOINTS_PROMPT = "Analyze these hand keypoints data for rehabilitation exercises. Based on the movement patterns, identify the specific exercise type, therapeutic applications, and key movement characteristics. Do not use any Markdown formatting like bold, italics, or bullet points. Reply in plain text only."
 MAX_FILE_SIZE = 20 * 1024 * 1024
@@ -58,6 +58,7 @@ SUPPORTED_MIME_TYPES = [
 
 # Initialize Gesture Recognizer
 gesture_recognizer = GestureRecognizer()
+cap = cv2.VideoCapture(0)  # Open webcam
 
 def calculate_similarity(text1, text2):
     """
@@ -257,38 +258,46 @@ def prepare_keypoints_for_gemini(video_data):
     
     return "\n".join(text_data)
 
-@app.post("/process_frame")
-async def process_frame(frame: UploadFile = File(...)):
-    """
-    Process a single frame sent from the frontend webcam
-    """
-    # Read the image from the uploaded file
-    contents = await frame.read()
+@app.get("/keypoints")
+async def get_keypoints():
+    ret, frame = cap.read()
+    if not ret:
+        return JSONResponse(content={"error": "Unable to access webcam"}, status_code=500)
+
+    keypoint_data = gesture_recognizer.extract_hand_keypoints(frame)
     
-    # Convert image bytes to numpy array
-    nparr = np.frombuffer(contents, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    
-    if img is None:
-        return JSONResponse(
-            content={"error": "Invalid image data"}, 
-            status_code=400
-        )
-    
-    # Process the frame using the gesture recognizer
-    keypoint_data = gesture_recognizer.extract_hand_keypoints(img)
-    
-    # Save to MongoDB (optional)
-    #document = {
-    #    "timestamp": datetime.datetime.utcnow(),
-    #    "hands": keypoint_data["hands"],
-    #    "recognized": keypoint_data["recognized"],
-    #    "gestures": keypoint_data["gestures"]
-    #}
+    # Save to MongoDB
+    document = {
+        "timestamp": datetime.datetime.utcnow(),
+        "hands": keypoint_data["hands"],
+        "recognized": keypoint_data["recognized"],
+        "gestures": keypoint_data["gestures"]
+    }
     # collection.insert_one(document)  # Uncomment to store data
-    
-    # Return the processed data
+
     return keypoint_data
+
+@app.get("/video_feed")
+async def video_feed():
+    def generate_frames():
+        for frame, gestures in gesture_recognizer.process_video(cap):
+            # Overlay text
+            recognized = len(gestures) > 0
+            status_text = "Recognized" if recognized else "Not Recognized"
+            color = (0, 255, 0) if recognized else (0, 0, 255)
+            cv2.putText(frame, status_text, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
+            
+            # Add detected gesture names
+            if gestures:
+                gesture_text = ", ".join(gestures)
+                cv2.putText(frame, gesture_text, (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
+            
+            # Encode frame as JPEG
+            _, buffer = cv2.imencode('.jpg', frame)
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+
+    return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.post("/upload")
 async def upload_video(video: UploadFile = File(...)):
@@ -397,6 +406,7 @@ async def upload_video(video: UploadFile = File(...)):
 # Gracefully release resources on shutdown
 @app.on_event("shutdown")
 def shutdown_event():
+    cap.release()
     gesture_recognizer.close()
     client.close()
 

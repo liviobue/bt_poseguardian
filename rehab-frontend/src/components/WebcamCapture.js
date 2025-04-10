@@ -55,7 +55,7 @@ const WebcamCapture = () => {
 
     const captureInterval = setInterval(() => {
       sendFrameToBackend();
-    }, 100); // Send frame every 100ms (10fps)
+    }, 100); // Send frame every 100 = 100ms (10fps)
 
     return () => clearInterval(captureInterval);
   }, [isCapturing]);
