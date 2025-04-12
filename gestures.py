@@ -25,7 +25,6 @@ class HandGesture:
         """Return the name of this gesture"""
         return self.name
 
-
 class OpenHandGesture(HandGesture):
     """Gesture for fully open hand with all fingers extended and properly spaced"""
     
@@ -53,49 +52,96 @@ class OpenHandGesture(HandGesture):
         
         is_right_hand = thumb_tip_x < pinky_tip_x
         
+        # Calculate hand scale to normalize distance thresholds
+        # Use distance from wrist to middle finger MCP as reference
+        wrist_point = [
+            hand_landmarks.landmark[WRIST].x,
+            hand_landmarks.landmark[WRIST].y,
+            hand_landmarks.landmark[WRIST].z
+        ]
+        middle_mcp_point = [
+            hand_landmarks.landmark[9].x,
+            hand_landmarks.landmark[9].y,
+            hand_landmarks.landmark[9].z
+        ]
+        hand_scale = self.calculate_3d_distance(wrist_point, middle_mcp_point)
+        
+        # Adjust thresholds based on hand scale
+        min_segment_distance = 0.035 * hand_scale  # More permissive minimum distance
+        min_extended_ratio = 0.9     # Lower ratio for straight finger (more permissive)
+        max_z_diff_ratio = 0.95       # More permissive z-difference threshold
+        
         # Check each finger is extended
         for i, (tip, middle, base) in enumerate(zip(FINGERTIPS, MIDDLE_JOINTS, BASE_JOINTS)):
-            tip_y = hand_landmarks.landmark[tip].y
-            middle_y = hand_landmarks.landmark[middle].y
-            base_y = hand_landmarks.landmark[base].y
+            # Get 3D coordinates for each joint
+            tip_coords = [hand_landmarks.landmark[tip].x, 
+                         hand_landmarks.landmark[tip].y, 
+                         hand_landmarks.landmark[tip].z]
             
-            # For thumb (i=0), handle differently based on hand orientation
+            middle_coords = [hand_landmarks.landmark[middle].x, 
+                            hand_landmarks.landmark[middle].y, 
+                            hand_landmarks.landmark[middle].z]
+            
+            base_coords = [hand_landmarks.landmark[base].x, 
+                          hand_landmarks.landmark[base].y, 
+                          hand_landmarks.landmark[base].z]
+            
+            # Calculate 3D distances between joints
+            tip_to_middle_dist = self.calculate_3d_distance(tip_coords, middle_coords)
+            middle_to_base_dist = self.calculate_3d_distance(middle_coords, base_coords)
+            tip_to_base_dist = self.calculate_3d_distance(tip_coords, base_coords)
+            
+            # Special handling for thumb
             if i == 0:  # Thumb
-                tip_x = hand_landmarks.landmark[tip].x
-                middle_x = hand_landmarks.landmark[middle].x
-                base_x = hand_landmarks.landmark[base].x
-                
-                # Check thumb extension based on hand orientation
+                # For thumb, check extension based on hand orientation
                 if is_right_hand:
-                    if not (tip_x < middle_x < base_x):
+                    if not (hand_landmarks.landmark[tip].x < hand_landmarks.landmark[middle].x < hand_landmarks.landmark[base].x):
                         return False
                 else:
-                    if not (tip_x > middle_x > base_x):
+                    if not (hand_landmarks.landmark[tip].x > hand_landmarks.landmark[middle].x > hand_landmarks.landmark[base].x):
                         return False
                 
-                # Check if thumb is relatively straight
-                expected_middle_x = (tip_x + base_x) / 2
-                if abs(middle_x - expected_middle_x) > tolerance:
-                    return False
-            else:
-                # For other fingers, they should be extended upward (decreasing y)
-                if not (tip_y < middle_y < base_y):  
+                # Check distances for thumb extension - less strict for thumb
+                if tip_to_middle_dist < 0.8 * min_segment_distance or middle_to_base_dist < 0.8 * min_segment_distance:
                     return False
                 
-                # Ensure fingers are nearly straight
-                expected_middle_y = (tip_y + base_y) / 2
-                if abs(middle_y - expected_middle_y) > tolerance:
+            else:
+                # For other fingers
+                # 1. Check if finger is extended upward (y coordinate decreasing)
+                if not (hand_landmarks.landmark[tip].y < hand_landmarks.landmark[middle].y < hand_landmarks.landmark[base].y):
+                    return False
+                
+                # 2. Check distances to ensure finger is straight and extended
+                if tip_to_middle_dist < min_segment_distance or middle_to_base_dist < min_segment_distance:
+                    return False
+                
+                # 3. Check the ratio of direct distance to segment distances
+                # This is still useful for detecting curling toward the camera, but with more permissive threshold
+                extended_ratio = tip_to_base_dist / (tip_to_middle_dist + middle_to_base_dist)
+                if extended_ratio < min_extended_ratio:
+                    return False
+                
+                # 4. Z-depth check - but more permissive
+                z_tip = hand_landmarks.landmark[tip].z
+                z_middle = hand_landmarks.landmark[middle].z
+                z_base = hand_landmarks.landmark[base].z
+                
+                # Calculate the range of z values
+                z_range = max(abs(z_tip - z_middle), abs(z_middle - z_base), abs(z_tip - z_base))
+                
+                # Calculate the total finger length in 3D
+                finger_segment_length = tip_to_middle_dist + middle_to_base_dist
+                
+                # More permissive check for z variation
+                if z_range > max_z_diff_ratio * finger_segment_length:
                     return False
         
-        # Now check the separation between each pair of fingertips
-        # We'll directly calculate the distance between fingertips
-        # and ensure they're not too close
-        
-        # UPDATED: Increased minimum distances between all fingers
-        min_thumb_index_distance = 0.12   # Increased from 0.11
-        min_index_middle_distance = 0.10  # Increased from 0.09
-        min_middle_ring_distance = 0.10   # Increased from general min_distance
-        min_ring_pinky_distance = 0.12    # Increased from 0.10
+        # Now check finger spacing as in the original code
+        # Check the separation between each pair of fingertips
+        min_thumb_index_distance = 0.12 * hand_scale
+        min_index_middle_distance = 0.09 * hand_scale  # Slightly more permissive
+        min_middle_ring_distance = 0.09 * hand_scale
+        min_ring_pinky_distance = 0.10 * hand_scale
         
         # Get all fingertips for easier access
         fingertips = [hand_landmarks.landmark[i] for i in FINGERTIPS]
@@ -104,13 +150,16 @@ class OpenHandGesture(HandGesture):
         # Check distance between thumb and index
         thumb_tip = fingertips[0]
         index_tip = fingertips[1]
-        distance = ((thumb_tip.x - index_tip.x)**2 + 
-                    (thumb_tip.y - index_tip.y)**2 + 
-                    (thumb_tip.z - index_tip.z)**2)**0.5
+        distance = self.calculate_3d_distance(
+            [thumb_tip.x, thumb_tip.y, thumb_tip.z],
+            [index_tip.x, index_tip.y, index_tip.z]
+        )
+        
         if distance < min_thumb_index_distance:
             return False
-        
-        # Calculate angle between thumb and index finger
+            
+        # Calculate and check angles between fingers
+        # Thumb and index angle check
         thumb_base = finger_bases[0]
         index_base = finger_bases[1]
         
@@ -127,67 +176,35 @@ class OpenHandGesture(HandGesture):
             index_tip.z - index_base.z
         ]
         
-        # Calculate the dot product
-        dot_product = (thumb_vector[0] * index_vector[0] + 
-                      thumb_vector[1] * index_vector[1] + 
-                      thumb_vector[2] * index_vector[2])
-        
-        # Calculate the magnitudes
-        thumb_mag = (thumb_vector[0]**2 + thumb_vector[1]**2 + thumb_vector[2]**2)**0.5
-        index_mag = (index_vector[0]**2 + index_vector[1]**2 + index_vector[2]**2)**0.5
-        
-        # Calculate the cosine of the angle
-        if thumb_mag * index_mag == 0:
-            return False  # Avoid division by zero
-            
-        cos_angle = dot_product / (thumb_mag * index_mag)
-        
-        # Ensure the angle is within appropriate range (-1 to 1)
-        cos_angle = max(min(cos_angle, 1.0), -1.0)
-        
-        # Convert to angle in degrees
-        angle = self.math.degrees(self.math.acos(cos_angle))
-        
-        # UPDATED: Check if the angle between thumb and index is large enough (more spread)
-        min_thumb_index_angle = 22
+        angle = self.calculate_angle(thumb_vector, index_vector)
+        min_thumb_index_angle = 30  # Slightly more permissive
         if angle < min_thumb_index_angle:
             return False
         
-        # UPDATED: Calculate and check angles between all finger pairs
-        # Define minimum angles between fingers (in degrees)
-        min_finger_angle = 10  # Minimum angle between adjacent fingers
+        # Check distances and angles between other finger pairs
+        min_finger_angle = 8  # Slightly more permissive minimum angle
         
         # Check distance and angle between index and middle
         middle_tip = fingertips[2]
         middle_base = finger_bases[2]
         
         # Distance check
-        distance = ((index_tip.x - middle_tip.x)**2 + 
-                    (index_tip.y - middle_tip.y)**2 + 
-                    (index_tip.z - middle_tip.z)**2)**0.5
+        distance = self.calculate_3d_distance(
+            [index_tip.x, index_tip.y, index_tip.z],
+            [middle_tip.x, middle_tip.y, middle_tip.z]
+        )
+        
         if distance < min_index_middle_distance:
             return False
         
-        # Angle check between index and middle
+        # Angle check
         middle_vector = [
             middle_tip.x - middle_base.x,
             middle_tip.y - middle_base.y,
             middle_tip.z - middle_base.z
         ]
         
-        dot_product = (index_vector[0] * middle_vector[0] + 
-                      index_vector[1] * middle_vector[1] + 
-                      index_vector[2] * middle_vector[2])
-        
-        middle_mag = (middle_vector[0]**2 + middle_vector[1]**2 + middle_vector[2]**2)**0.5
-        
-        if index_mag * middle_mag == 0:
-            return False
-            
-        cos_angle = dot_product / (index_mag * middle_mag)
-        cos_angle = max(min(cos_angle, 1.0), -1.0)
-        
-        angle = self.math.degrees(self.math.acos(cos_angle))
+        angle = self.calculate_angle(index_vector, middle_vector)
         if angle < min_finger_angle:
             return False
         
@@ -196,32 +213,22 @@ class OpenHandGesture(HandGesture):
         ring_base = finger_bases[3]
         
         # Distance check
-        distance = ((middle_tip.x - ring_tip.x)**2 + 
-                    (middle_tip.y - ring_tip.y)**2 + 
-                    (middle_tip.z - ring_tip.z)**2)**0.5
+        distance = self.calculate_3d_distance(
+            [middle_tip.x, middle_tip.y, middle_tip.z],
+            [ring_tip.x, ring_tip.y, ring_tip.z]
+        )
+        
         if distance < min_middle_ring_distance:
             return False
         
-        # Angle check between middle and ring
+        # Angle check
         ring_vector = [
             ring_tip.x - ring_base.x,
             ring_tip.y - ring_base.y,
             ring_tip.z - ring_base.z
         ]
         
-        dot_product = (middle_vector[0] * ring_vector[0] + 
-                      middle_vector[1] * ring_vector[1] + 
-                      middle_vector[2] * ring_vector[2])
-        
-        ring_mag = (ring_vector[0]**2 + ring_vector[1]**2 + ring_vector[2]**2)**0.5
-        
-        if middle_mag * ring_mag == 0:
-            return False
-            
-        cos_angle = dot_product / (middle_mag * ring_mag)
-        cos_angle = max(min(cos_angle, 1.0), -1.0)
-        
-        angle = self.math.degrees(self.math.acos(cos_angle))
+        angle = self.calculate_angle(middle_vector, ring_vector)
         if angle < min_finger_angle:
             return False
         
@@ -230,37 +237,56 @@ class OpenHandGesture(HandGesture):
         pinky_base = finger_bases[4]
         
         # Distance check
-        distance = ((ring_tip.x - pinky_tip.x)**2 + 
-                    (ring_tip.y - pinky_tip.y)**2 + 
-                    (ring_tip.z - pinky_tip.z)**2)**0.5
+        distance = self.calculate_3d_distance(
+            [ring_tip.x, ring_tip.y, ring_tip.z],
+            [pinky_tip.x, pinky_tip.y, pinky_tip.z]
+        )
+        
         if distance < min_ring_pinky_distance:
             return False
         
-        # Angle check between ring and pinky
+        # Angle check
         pinky_vector = [
             pinky_tip.x - pinky_base.x,
             pinky_tip.y - pinky_base.y,
             pinky_tip.z - pinky_base.z
         ]
         
-        dot_product = (ring_vector[0] * pinky_vector[0] + 
-                      ring_vector[1] * pinky_vector[1] + 
-                      ring_vector[2] * pinky_vector[2])
-        
-        pinky_mag = (pinky_vector[0]**2 + pinky_vector[1]**2 + pinky_vector[2]**2)**0.5
-        
-        if ring_mag * pinky_mag == 0:
-            return False
-            
-        cos_angle = dot_product / (ring_mag * pinky_mag)
-        cos_angle = max(min(cos_angle, 1.0), -1.0)
-        
-        angle = self.math.degrees(self.math.acos(cos_angle))
+        angle = self.calculate_angle(ring_vector, pinky_vector)
         if angle < min_finger_angle:
             return False
         
         # If all checks pass, it's a proper open hand
         return True
+    
+    def calculate_3d_distance(self, point1, point2):
+        """Calculate Euclidean distance between two 3D points"""
+        return ((point1[0] - point2[0])**2 + 
+                (point1[1] - point2[1])**2 + 
+                (point1[2] - point2[2])**2)**0.5
+    
+    def calculate_angle(self, vector1, vector2):
+        """Calculate angle between two vectors in degrees"""
+        # Calculate the dot product
+        dot_product = (vector1[0] * vector2[0] + 
+                       vector1[1] * vector2[1] + 
+                       vector1[2] * vector2[2])
+        
+        # Calculate the magnitudes
+        mag1 = (vector1[0]**2 + vector1[1]**2 + vector1[2]**2)**0.5
+        mag2 = (vector2[0]**2 + vector2[1]**2 + vector2[2]**2)**0.5
+        
+        # Avoid division by zero
+        if mag1 * mag2 == 0:
+            return 0
+            
+        cos_angle = dot_product / (mag1 * mag2)
+        
+        # Ensure the cosine is within valid range (-1 to 1)
+        cos_angle = max(min(cos_angle, 1.0), -1.0)
+        
+        # Convert to angle in degrees
+        return self.math.degrees(self.math.acos(cos_angle))
 
 class ThumbTouchAllFingersGesture(HandGesture):
     """Gesture for thumb touching all other fingers in sequence"""
