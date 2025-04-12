@@ -149,7 +149,7 @@ class OpenHandGesture(HandGesture):
         angle = self.math.degrees(self.math.acos(cos_angle))
         
         # UPDATED: Check if the angle between thumb and index is large enough (more spread)
-        min_thumb_index_angle = 35
+        min_thumb_index_angle = 22
         if angle < min_thumb_index_angle:
             return False
         
