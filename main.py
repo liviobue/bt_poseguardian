@@ -47,8 +47,10 @@ collection = db["data"]
 # Google API Connection
 genai.configure(api_key=Config.GOOGLE_API_KEY)
 
-VIDEO_PROMPT = "Analyze this rehabilitation exercise video. Identify specific movements, potential therapeutic applications, and exercise type. Focus on hand movements if visible. Do not use any Markdown formatting like bold, italics, or bullet points. Reply in plain text only."
-KEYPOINTS_PROMPT = "Analyze these hand keypoints data for rehabilitation exercises. Based on the movement patterns, identify the specific exercise type, therapeutic applications, and key movement characteristics. Do not use any Markdown formatting like bold, italics, or bullet points. Reply in plain text only."
+#VIDEO_PROMPT = "Analyze this rehabilitation exercise video. Focus on identifying hand movements and assessing whether the movements are physiologically correct or if there are any unnatural or compensatory patterns. Provide the following in bullet points: - The type of rehabilitation exercise being performed - A description of the hand movement patterns - An evaluation of movement quality (physiologically correct vs. unnatural) - Any signs of abnormal movement, compensation, or deviation from ideal execution - Suggestions for therapeutic adjustments or improvements. Use plain text only, no Markdown formatting like bold or italics."
+VIDEO_PROMPT = "Evaluate this rehabilitation video. Focus on hand movement, identify the exercise type, assess if movement is physiologically correct, and note any unnatural patterns. Use bullet points and plain text only."
+#KEYPOINTS_PROMPT = "Analyze the following hand keypoint data representing a rehabilitation exercise. Provide a bullet-point summary including: - The recognized type of exercise - An interpretation of movement patterns based on keypoints - An assessment of whether movements are physiologically correct - Any detected unnatural, compensatory, or asymmetrical movement patterns - Recommendations for correction or further evaluation. Keep the response in plain text, without Markdown formatting."
+KEYPOINTS_PROMPT = "Analyze these hand keypoints. Identify the exercise, check if movements are physiologically correct, and list any unnatural patterns. Bullet points only, plain text."
 MAX_FILE_SIZE = 20 * 1024 * 1024
 SUPPORTED_MIME_TYPES = [
     'video/mp4',

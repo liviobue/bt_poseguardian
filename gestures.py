@@ -32,7 +32,6 @@ class OpenHandGesture(HandGesture):
         self.name = "Open Hand"
         
         # Import math module if needed for angular calculations
-        import math
         self.math = math
     
     def recognize(self, hand_landmarks):
@@ -317,7 +316,7 @@ class ThumbTouchAllFingersGesture(HandGesture):
     
     def recognize(self, hand_landmarks, current_time=None):
         """
-        Check if the thumb has touched all fingers in sequence
+        Check if the thumb has touched all fingers in sequence, not simultaneously
         
         Args:
             hand_landmarks: MediaPipe hand landmarks
@@ -342,13 +341,24 @@ class ThumbTouchAllFingersGesture(HandGesture):
         # Finger tip landmark indices
         finger_tips = [8, 12, 16, 20]  # Index, Middle, Ring, Pinky
         
+        # Check how many fingers are currently touching the thumb
+        currently_touching = [self.is_thumb_touching_finger(hand_landmarks, tip) for tip in finger_tips]
+        touching_count = sum(currently_touching)
+        
+        # If more than one finger is touching, it's not a valid sequence
+        if touching_count > 1:
+            self.reset()
+            return False
+        
         # Start tracking sequence when first finger is touched
         if self.sequence_start_time is None and self.is_thumb_touching_finger(hand_landmarks, finger_tips[0]):
-            self.sequence_start_time = current_time
-            self.finger_touched[0] = True
-            self.current_finger_idx = 1  # Next expect the middle finger
+            # Make sure other fingers are not touching
+            if touching_count == 1:
+                self.sequence_start_time = current_time
+                self.finger_touched[0] = True
+                self.current_finger_idx = 1  # Next expect the middle finger
             return False
-            
+                
         # Check for timeout if sequence has started
         if self.sequence_start_time is not None:
             if current_time - self.sequence_start_time > self.sequence_timeout:
@@ -357,8 +367,10 @@ class ThumbTouchAllFingersGesture(HandGesture):
         
         # If sequence has started, check for next finger in sequence
         if self.sequence_start_time is not None and self.current_finger_idx < 4:
-            # Check if the expected next finger is being touched
-            if self.is_thumb_touching_finger(hand_landmarks, finger_tips[self.current_finger_idx]):
+            # Check if the expected next finger is being touched (and ONLY that finger)
+            expected_finger_touching = self.is_thumb_touching_finger(hand_landmarks, finger_tips[self.current_finger_idx])
+            
+            if expected_finger_touching and touching_count == 1:
                 self.finger_touched[self.current_finger_idx] = True
                 self.current_finger_idx += 1  # Move to next finger
                 
@@ -369,9 +381,9 @@ class ThumbTouchAllFingersGesture(HandGesture):
                     return True
             
             # Check if a finger out of sequence is being touched
-            for i in range(4):
-                if i != self.current_finger_idx and not self.finger_touched[i]:
-                    if self.is_thumb_touching_finger(hand_landmarks, finger_tips[i]):
+            elif touching_count > 0:
+                for i in range(4):
+                    if i != self.current_finger_idx and self.is_thumb_touching_finger(hand_landmarks, finger_tips[i]):
                         # Out of sequence touch - reset
                         self.reset()
                         return False

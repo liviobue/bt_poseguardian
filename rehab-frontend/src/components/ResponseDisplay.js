@@ -30,10 +30,14 @@ const ResponseDisplay = ({ response }) => {
     <div style={containerStyle}>
       <div style={videoStyle}>
         <h3>Video Analysis:</h3>
-        <p>{response.video_analysis || 'No video analysis available'}</p>
+        <pre style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
+          {response.video_analysis || 'No video analysis available'}
+        </pre>
         
         <h3>Keypoints Analysis:</h3>
-        <p>{response.keypoints_analysis || 'No keypoints analysis available'}</p>
+        <pre style={{ whiteSpace: 'pre-wrap', wordWrap: 'break-word' }}>
+          {response.keypoints_analysis || 'No keypoints analysis available'}
+        </pre>
         
         {response.similarity_score !== undefined && (
           <div style={similarityContainerStyle}>
