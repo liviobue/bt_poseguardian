@@ -2,6 +2,9 @@ import mediapipe as mp
 import numpy as np
 import cv2
 import math
+import time
+import threading
+import inspect
 
 class HandGesture:
     """Base class for hand gesture recognition"""
@@ -31,7 +34,6 @@ class OpenHandGesture(HandGesture):
     def __init__(self):
         self.name = "Open Hand"
         
-        # Import math module if needed for angular calculations
         self.math = math
     
     def recognize(self, hand_landmarks):
@@ -326,7 +328,6 @@ class ThumbTouchAllFingersGesture(HandGesture):
             bool: True if gesture is recognized, False otherwise
         """
         if current_time is None:
-            import time
             current_time = time.time()
             
         # If gesture was already completed and we're in display period
@@ -402,62 +403,272 @@ class ThumbTouchAllFingersGesture(HandGesture):
         touched_count = sum(1 for touched in self.finger_touched if touched)
         return f"{touched_count}/4 fingers"
 
-class PointingGesture(HandGesture):
-    """Gesture for pointing (index finger extended, others curled)"""
+class CylindricalGraspGesture(HandGesture):
+    """Gesture for cylindrical grasp (all digits flexed in a C-shape as if grasping a cylinder)"""
     
     def __init__(self):
-        self.name = "Pointing"
+        self.name = "Cylindrical Grasp"
+        self.math = math
     
     def recognize(self, hand_landmarks):
-        """Checks if index finger is extended while other fingers are curled."""
+        """
+        Recognizes the cylindrical grasp gesture based on clinical specifications.
         
-        # Landmark indices for index finger
-        INDEX_TIP = 8
-        INDEX_PIP = 7
-        INDEX_MCP = 6
+        For a cylindrical grasp:
+        - All fingers are flexed in a C-shape around an imaginary cylindrical object
+        - MCP joints flex to 45-60°
+        - PIP and DIP joints flex to 40-50°
+        - Thumb opposes the ulnar side of the middle finger's proximal phalanx
         
-        # Other fingertips
-        OTHER_TIPS = [4, 12, 16, 20]  # Thumb, Middle, Ring, Pinky
-        OTHER_BASES = [2, 10, 14, 18]  # Respective MCP joints
+        Args:
+            hand_landmarks: MediaPipe hand landmarks
+            
+        Returns:
+            bool: True if gesture is recognized, False otherwise
+        """
+        # Landmark indices
+        WRIST = 0
+        THUMB_CMC = 1  # Carpometacarpal joint
+        THUMB_MCP = 2  # Metacarpophalangeal joint
+        THUMB_IP = 3   # Interphalangeal joint
+        THUMB_TIP = 4
         
-        tolerance = 0.05  # Tolerance for natural variations
+        # Finger base (MCP), PIP, DIP and tips
+        INDEX_MCP, INDEX_PIP, INDEX_DIP, INDEX_TIP = 5, 6, 7, 8
+        MIDDLE_MCP, MIDDLE_PIP, MIDDLE_DIP, MIDDLE_TIP = 9, 10, 11, 12
+        RING_MCP, RING_PIP, RING_DIP, RING_TIP = 13, 14, 15, 16
+        PINKY_MCP, PINKY_PIP, PINKY_DIP, PINKY_TIP = 17, 18, 19, 20
         
-        # 1. Check if index finger is extended
-        index_tip_y = hand_landmarks.landmark[INDEX_TIP].y
-        index_pip_y = hand_landmarks.landmark[INDEX_PIP].y
-        index_mcp_y = hand_landmarks.landmark[INDEX_MCP].y
+        # Finger groups for easier iteration
+        MCPs = [INDEX_MCP, MIDDLE_MCP, RING_MCP, PINKY_MCP]
+        PIPs = [INDEX_PIP, MIDDLE_PIP, RING_PIP, PINKY_PIP]
+        DIPs = [INDEX_DIP, MIDDLE_DIP, RING_DIP, PINKY_DIP]
+        TIPS = [INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP]
         
-        if not (index_tip_y < index_pip_y < index_mcp_y):
+        # Calculate hand scale to normalize distance thresholds
+        wrist_point = [
+            hand_landmarks.landmark[WRIST].x,
+            hand_landmarks.landmark[WRIST].y,
+            hand_landmarks.landmark[WRIST].z
+        ]
+        middle_mcp_point = [
+            hand_landmarks.landmark[MIDDLE_MCP].x,
+            hand_landmarks.landmark[MIDDLE_MCP].y,
+            hand_landmarks.landmark[MIDDLE_MCP].z
+        ]
+        hand_scale = self.calculate_3d_distance(wrist_point, middle_mcp_point)
+        
+        # Check if the hand is in a cylindrical grasp configuration
+        
+        # 1. Check MCP joint flexion angles (should be 45-60°)
+        for mcp in MCPs:
+            # Calculate vectors for MCP angle
+            mcp_point = hand_landmarks.landmark[mcp]
+            pip_point = hand_landmarks.landmark[mcp + 1]  # PIP is always MCP + 1
+            palm_direction = self.get_palm_direction(hand_landmarks)
+            
+            # Vector from MCP to PIP
+            mcp_to_pip = [
+                pip_point.x - mcp_point.x,
+                pip_point.y - mcp_point.y,
+                pip_point.z - mcp_point.z
+            ]
+            
+            # Calculate angle between palm direction and finger direction
+            angle = self.calculate_angle(palm_direction, mcp_to_pip)
+            
+            # Convert to joint angle (90° - angle between vectors)
+            joint_angle = 90 - angle
+            
+            # MCP joints should flex to 45-60°
+            if not (40 <= joint_angle <= 65):  # Slightly wider range for tolerance
+                return False
+        
+        # 2. Check PIP joint flexion angles (should be 40-50°)
+        for pip in PIPs:
+            pip_angle = self.calculate_joint_angle(hand_landmarks, pip-1, pip, pip+1)
+            if not (35 <= pip_angle <= 55):  # Slightly wider range for tolerance
+                return False
+        
+        # 3. Check DIP joint flexion angles (should be 40-50°)
+        for dip in DIPs:
+            dip_angle = self.calculate_joint_angle(hand_landmarks, dip-1, dip, dip+1)
+            if not (35 <= dip_angle <= 55):  # Slightly wider range for tolerance
+                return False
+        
+        # 4. Check thumb opposition to middle finger's proximal phalanx
+        thumb_tip = [
+            hand_landmarks.landmark[THUMB_TIP].x,
+            hand_landmarks.landmark[THUMB_TIP].y,
+            hand_landmarks.landmark[THUMB_TIP].z
+        ]
+        
+        middle_proximal = [
+            hand_landmarks.landmark[MIDDLE_MCP].x,
+            hand_landmarks.landmark[MIDDLE_MCP].y,
+            hand_landmarks.landmark[MIDDLE_MCP].z
+        ]
+        
+        # Distance between thumb tip and middle finger's proximal phalanx
+        thumb_to_middle_dist = self.calculate_3d_distance(thumb_tip, middle_proximal)
+        
+        # The distance should be within a reasonable range based on hand scale
+        # Optimal spacing is mentioned as 3.5-4.2 cm, but we need to normalize to hand scale
+        optimal_min = 0.3 * hand_scale
+        optimal_max = 0.5 * hand_scale
+        
+        if not (optimal_min <= thumb_to_middle_dist <= optimal_max):
             return False
         
-        # 2. Check if other fingers are curled
-        for tip, base in zip(OTHER_TIPS, OTHER_BASES):
-            tip_y = hand_landmarks.landmark[tip].y
-            base_y = hand_landmarks.landmark[base].y
+        # 5. Check C-shape formation of fingers
+        # For a proper C-shape, fingertips should be closer to the palm than PIPs
+        for tip, pip, mcp in zip(TIPS, PIPs, MCPs):
+            tip_point = hand_landmarks.landmark[tip]
+            pip_point = hand_landmarks.landmark[pip]
+            mcp_point = hand_landmarks.landmark[mcp]
             
-            # Special case for thumb
-            if tip == 4:
-                # For thumb, we check that it's not fully extended
-                thumb_tip = hand_landmarks.landmark[4]
-                thumb_ip = hand_landmarks.landmark[3]
-                thumb_mcp = hand_landmarks.landmark[2]
-                thumb_cmc = hand_landmarks.landmark[1]
-                
-                # Calculate distance between thumb tip and index finger base to check if thumb is close
-                thumb_tip_x = thumb_tip.x
-                index_base_x = hand_landmarks.landmark[5].x  # Index finger base
-                
-                # Thumb should not be extended away from hand
-                distance = ((thumb_tip_x - index_base_x)**2)**0.5
-                if distance > 0.1:  # Arbitrary threshold, may need adjustment
-                    return False
-            else:
-                # For all other fingers (middle, ring, pinky), ensure they're curled
-                if tip_y <= base_y + tolerance:  # Adding tolerance for minor variations
-                    return False
+            # Get vector from palm center to fingertip
+            palm_center = self.calculate_palm_center(hand_landmarks)
+            palm_to_tip = [
+                tip_point.x - palm_center[0],
+                tip_point.y - palm_center[1],
+                tip_point.z - palm_center[2]
+            ]
+            
+            # Get vector from palm center to PIP
+            palm_to_pip = [
+                pip_point.x - palm_center[0],
+                pip_point.y - palm_center[1],
+                pip_point.z - palm_center[2]
+            ]
+            
+            # Distance from palm to tip should be less than distance from palm to PIP
+            # This ensures the C-shape curling of fingers
+            palm_tip_dist = self.calculate_vector_magnitude(palm_to_tip)
+            palm_pip_dist = self.calculate_vector_magnitude(palm_to_pip)
+            
+            if palm_tip_dist >= palm_pip_dist:
+                return False
         
+        # 6. Check thumb CMC joint adduction (30-35° of palmar adduction)
+        # This is approximated by checking the thumb's position relative to the index finger
+        thumb_tip = hand_landmarks.landmark[THUMB_TIP]
+        index_mcp = hand_landmarks.landmark[INDEX_MCP]
+        
+        # For a cylindrical grasp, thumb tip should be closer to the palm than extended
+        if thumb_tip.z >= index_mcp.z:
+            return False
+        
+        # If all checks pass, it's a cylindrical grasp
         return True
-
+    
+    def calculate_3d_distance(self, point1, point2):
+        """Calculate Euclidean distance between two 3D points"""
+        return ((point1[0] - point2[0])**2 + 
+                (point1[1] - point2[1])**2 + 
+                (point1[2] - point2[2])**2)**0.5
+    
+    def calculate_vector_magnitude(self, vector):
+        """Calculate the magnitude of a 3D vector"""
+        return (vector[0]**2 + vector[1]**2 + vector[2]**2)**0.5
+    
+    def calculate_angle(self, vector1, vector2):
+        """Calculate angle between two vectors in degrees"""
+        # Calculate the dot product
+        dot_product = (vector1[0] * vector2[0] + 
+                       vector1[1] * vector2[1] + 
+                       vector1[2] * vector2[2])
+        
+        # Calculate the magnitudes
+        mag1 = self.calculate_vector_magnitude(vector1)
+        mag2 = self.calculate_vector_magnitude(vector2)
+        
+        # Avoid division by zero
+        if mag1 * mag2 == 0:
+            return 0
+            
+        cos_angle = dot_product / (mag1 * mag2)
+        
+        # Ensure the cosine is within valid range (-1 to 1)
+        cos_angle = max(min(cos_angle, 1.0), -1.0)
+        
+        # Convert to angle in degrees
+        return self.math.degrees(self.math.acos(cos_angle))
+    
+    def calculate_joint_angle(self, hand_landmarks, prev_idx, curr_idx, next_idx):
+        """Calculate the angle at a joint in degrees"""
+        prev_point = hand_landmarks.landmark[prev_idx]
+        curr_point = hand_landmarks.landmark[curr_idx]
+        next_point = hand_landmarks.landmark[next_idx]
+        
+        # Vector from current joint to previous joint
+        vector1 = [
+            prev_point.x - curr_point.x,
+            prev_point.y - curr_point.y,
+            prev_point.z - curr_point.z
+        ]
+        
+        # Vector from current joint to next joint
+        vector2 = [
+            next_point.x - curr_point.x,
+            next_point.y - curr_point.y,
+            next_point.z - curr_point.z
+        ]
+        
+        # Calculate angle between vectors
+        angle = self.calculate_angle(vector1, vector2)
+        
+        # Return the supplement of the angle to get the joint angle
+        return 180 - angle
+    
+    def get_palm_direction(self, hand_landmarks):
+        """Calculate the palm normal direction vector"""
+        # Use index, middle, and pinky MCP joints to define the palm plane
+        index_mcp = hand_landmarks.landmark[5]
+        middle_mcp = hand_landmarks.landmark[9]
+        pinky_mcp = hand_landmarks.landmark[17]
+        
+        # Create vectors in the palm plane
+        vector1 = [
+            middle_mcp.x - index_mcp.x,
+            middle_mcp.y - index_mcp.y,
+            middle_mcp.z - index_mcp.z
+        ]
+        
+        vector2 = [
+            pinky_mcp.x - middle_mcp.x,
+            pinky_mcp.y - middle_mcp.y,
+            pinky_mcp.z - middle_mcp.z
+        ]
+        
+        # Calculate cross product to get palm normal
+        palm_normal = [
+            vector1[1] * vector2[2] - vector1[2] * vector2[1],
+            vector1[2] * vector2[0] - vector1[0] * vector2[2],
+            vector1[0] * vector2[1] - vector1[1] * vector2[0]
+        ]
+        
+        # Normalize the vector
+        magnitude = self.calculate_vector_magnitude(palm_normal)
+        if magnitude > 0:
+            palm_normal = [
+                palm_normal[0] / magnitude,
+                palm_normal[1] / magnitude,
+                palm_normal[2] / magnitude
+            ]
+            
+        return palm_normal
+    
+    def calculate_palm_center(self, hand_landmarks):
+        """Calculate the approximate center of the palm"""
+        # Use the average position of MCP joints as palm center
+        mcp_indices = [5, 9, 13, 17]  # Index, Middle, Ring, Pinky MCPs
+        
+        sum_x = sum(hand_landmarks.landmark[idx].x for idx in mcp_indices)
+        sum_y = sum(hand_landmarks.landmark[idx].y for idx in mcp_indices)
+        sum_z = sum(hand_landmarks.landmark[idx].z for idx in mcp_indices)
+        
+        return [sum_x / len(mcp_indices), sum_y / len(mcp_indices), sum_z / len(mcp_indices)]
 
 class GestureRecognizer:
     """Main class for recognizing multiple hand gestures"""
@@ -477,8 +688,8 @@ class GestureRecognizer:
         
         # Register default gestures
         self.register_gesture(OpenHandGesture())
-        self.register_gesture(ThumbTouchAllFingersGesture())  # Replace ClosedFistGesture
-        self.register_gesture(PointingGesture())
+        self.register_gesture(ThumbTouchAllFingersGesture())
+        self.register_gesture(CylindricalGraspGesture())
     
     def register_gesture(self, gesture):
         """Add a new gesture to the recognizer"""
@@ -502,7 +713,6 @@ class GestureRecognizer:
         Returns:
             tuple: (recognized: bool, gesture_name: str, progress: str)
         """
-        import time
         if current_time is None:
             current_time = time.time()
             
@@ -511,7 +721,6 @@ class GestureRecognizer:
             recognized = False
             if hasattr(gesture, 'recognize') and callable(getattr(gesture, 'recognize')):
                 # Check if the recognize method accepts a time parameter
-                import inspect
                 params = inspect.signature(gesture.recognize).parameters
                 if len(params) > 1:
                     recognized = gesture.recognize(hand_landmarks, current_time)
@@ -538,7 +747,6 @@ class GestureRecognizer:
         Returns:
             dict: Keypoints and recognition results
         """
-        import time
         current_time = time.time()
         
         # Convert frame to RGB
@@ -601,8 +809,7 @@ class GestureRecognizer:
     
     def process_video(self, cap):
         """Generator function to process video frames"""
-        import time
-        
+
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -652,13 +859,10 @@ class GestureRecognizer:
                             if thumb_gesture:
                                 # Schedule a reset after the display time
                                 def reset_later():
-                                    import threading
-                                    import time
                                     time.sleep(3.0)  # Wait for display duration
                                     thumb_gesture.reset()
                                 
                                 # Start a thread to reset the gesture after display time
-                                import threading
                                 threading.Thread(target=reset_later).start()
                         
                         if progress:
