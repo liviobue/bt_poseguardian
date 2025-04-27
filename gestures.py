@@ -403,6 +403,7 @@ class ThumbTouchAllFingersGesture(HandGesture):
         touched_count = sum(1 for touched in self.finger_touched if touched)
         return f"{touched_count}/4 fingers"
 
+
 class CylindricalGraspGesture(HandGesture):
     """Gesture for cylindrical grasp (all digits flexed in a C-shape as if grasping a cylinder)"""
     
@@ -670,6 +671,7 @@ class CylindricalGraspGesture(HandGesture):
         
         return [sum_x / len(mcp_indices), sum_y / len(mcp_indices), sum_z / len(mcp_indices)]
 
+
 class GestureRecognizer:
     """Main class for recognizing multiple hand gestures"""
     
@@ -808,7 +810,7 @@ class GestureRecognizer:
         self.mp_drawing.draw_landmarks(frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS)
     
     def process_video(self, cap):
-        """Generator function to process video frames"""
+        """Generator function to process video frames with angle visualization"""
 
         while True:
             ret, frame = cap.read()
@@ -838,8 +840,28 @@ class GestureRecognizer:
                         self.last_completed_gestures.remove(gesture_name)
 
             if result.multi_hand_landmarks:
-                for hand_landmarks in result.multi_hand_landmarks:
+                for hand_idx, hand_landmarks in enumerate(result.multi_hand_landmarks):
+                    # Draw MediaPipe landmarks
                     self.draw_landmarks(frame, hand_landmarks)
+                    
+                    # Draw our custom angle visualization
+                    self.draw_angles_visualization(frame, hand_landmarks)
+                    
+                    # Calculate finger angles for numerical display
+                    angles = self.calculate_finger_angles(hand_landmarks)
+                    
+                    # Create a semi-transparent box for angle display
+                    overlay = frame.copy()
+                    cv2.rectangle(overlay, (10, 130), (250, 290), (0, 0, 0), -1)
+                    cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
+                    
+                    # Display angles on the frame in a box
+                    angle_y_position = 160
+                    for angle_name, angle_value in angles.items():
+                        text = f"{angle_name}: {angle_value:.1f}°"
+                        cv2.putText(frame, text, (20, angle_y_position), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2, cv2.LINE_AA)
+                        angle_y_position += 30
                     
                     # Recognize the gesture
                     recognized, gesture_name, progress = self.recognize_gesture(hand_landmarks, current_time)
@@ -893,6 +915,232 @@ class GestureRecognizer:
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3, cv2.LINE_AA)
 
             yield frame, regular_gestures
+
+    def calculate_finger_angles(self, hand_landmarks):
+        """
+        Calculate angles between adjacent fingers
+        
+        Args:
+            hand_landmarks: MediaPipe hand landmarks
+            
+        Returns:
+            dict: Dictionary of angles between finger pairs
+        """
+        # Finger MCP (base) joints
+        mcps = [5, 9, 13, 17]  # Index, Middle, Ring, Pinky
+        wrist = 0
+        
+        # Get the thumb CMC joint
+        thumb_cmc = 1
+        
+        # Dictionary to store angles
+        angles = {}
+        
+        # Calculate angles between adjacent fingers
+        for i in range(len(mcps) - 1):
+            # Get current and next finger MCP points
+            current_mcp = hand_landmarks.landmark[mcps[i]]
+            next_mcp = hand_landmarks.landmark[mcps[i + 1]]
+            
+            # Create vectors from wrist to MCPs
+            wrist_point = hand_landmarks.landmark[wrist]
+            vector1 = [
+                current_mcp.x - wrist_point.x,
+                current_mcp.y - wrist_point.y,
+                current_mcp.z - wrist_point.z
+            ]
+            
+            vector2 = [
+                next_mcp.x - wrist_point.x,
+                next_mcp.y - wrist_point.y,
+                next_mcp.z - wrist_point.z
+            ]
+            
+            # Calculate angle between vectors
+            angle = self.calculate_angle(vector1, vector2)
+            
+            # Store the angle between these fingers
+            finger_names = ["index-middle", "middle-ring", "ring-pinky"]
+            angles[finger_names[i]] = angle
+        
+        # Calculate angle between thumb and index finger
+        thumb_cmc_point = hand_landmarks.landmark[thumb_cmc]
+        index_mcp = hand_landmarks.landmark[mcps[0]]
+        
+        thumb_vector = [
+            hand_landmarks.landmark[4].x - thumb_cmc_point.x,  # Thumb tip to CMC
+            hand_landmarks.landmark[4].y - thumb_cmc_point.y,
+            hand_landmarks.landmark[4].z - thumb_cmc_point.z
+        ]
+        
+        index_vector = [
+            index_mcp.x - wrist_point.x,
+            index_mcp.y - wrist_point.y,
+            index_mcp.z - wrist_point.z
+        ]
+        
+        thumb_index_angle = self.calculate_angle(thumb_vector, index_vector)
+        angles["thumb-index"] = thumb_index_angle
+        
+        return angles
+
+    # Modify the calculate_angle method to handle potential invalid inputs
+    def calculate_angle(self, vector1, vector2):
+        """Calculate angle between two vectors in degrees"""
+        # Calculate the dot product
+        dot_product = (vector1[0] * vector2[0] + 
+                    vector1[1] * vector2[1] + 
+                    vector1[2] * vector2[2])
+        
+        # Calculate the magnitudes
+        mag1 = (vector1[0]**2 + vector1[1]**2 + vector1[2]**2)**0.5
+        mag2 = (vector2[0]**2 + vector2[1]**2 + vector2[2]**2)**0.5
+        
+        # Avoid division by zero
+        if mag1 * mag2 < 0.0001:  # Use small threshold to avoid numerical issues
+            return 0
+            
+        cos_angle = dot_product / (mag1 * mag2)
+        
+        # Ensure the cosine is within valid range (-1 to 1)
+        cos_angle = max(min(cos_angle, 1.0), -1.0)
+        
+        # Convert to angle in degrees
+        return math.degrees(math.acos(cos_angle))
+
+    def draw_angles_visualization(self, frame, hand_landmarks):
+        """
+        Draw visual representation of angles between fingers
+        
+        Args:
+            frame: OpenCV image frame
+            hand_landmarks: MediaPipe hand landmarks
+        """
+        # Get image dimensions
+        height, width = frame.shape[:2]
+        
+        # Draw lines between finger bases and wrist to visualize vectors
+        mcps = [5, 9, 13, 17]  # Index, Middle, Ring, Pinky MCPs
+        wrist_idx = 0
+        thumb_cmc_idx = 1
+        thumb_tip_idx = 4
+        
+        # Convert normalized coordinates to pixel coordinates
+        def get_pixel_coords(landmark):
+            return (int(landmark.x * width), int(landmark.y * height))
+        
+        # Get coordinates
+        wrist = get_pixel_coords(hand_landmarks.landmark[wrist_idx])
+        thumb_cmc = get_pixel_coords(hand_landmarks.landmark[thumb_cmc_idx])
+        thumb_tip = get_pixel_coords(hand_landmarks.landmark[thumb_tip_idx])
+        
+        # Draw lines from wrist to each MCP
+        mcp_points = []
+        for mcp_idx in mcps:
+            mcp = get_pixel_coords(hand_landmarks.landmark[mcp_idx])
+            mcp_points.append(mcp)
+            # Draw line from wrist to MCP
+            cv2.line(frame, wrist, mcp, (0, 255, 255), 2)
+        
+        # Draw line from thumb CMC to thumb tip to visualize thumb vector
+        cv2.line(frame, thumb_cmc, thumb_tip, (0, 255, 255), 2)
+        
+        # Calculate and draw angles between adjacent fingers
+        for i in range(len(mcp_points) - 1):
+            # Get points for current and next finger
+            p1 = mcp_points[i]
+            p2 = wrist
+            p3 = mcp_points[i + 1]
+            
+            # Draw arc to visualize angle
+            self.draw_angle_arc(frame, p2, p1, p3)
+            
+            # Calculate angle for display
+            v1 = [p1[0] - p2[0], p1[1] - p2[1]]
+            v2 = [p3[0] - p2[0], p3[1] - p2[1]]
+            
+            # Calculate dot product and magnitudes
+            dot = v1[0]*v2[0] + v1[1]*v2[1]
+            mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
+            mag2 = math.sqrt(v2[0]**2 + v2[1]**2)
+            
+            # Avoid division by zero
+            if mag1 * mag2 < 0.1:
+                continue
+                
+            cos_angle = dot / (mag1 * mag2)
+            cos_angle = max(min(cos_angle, 1.0), -1.0)  # Clamp to avoid domain errors
+            angle = math.degrees(math.acos(cos_angle))
+            
+            # Display angle text at midpoint
+            mid_x = int((p1[0] + p3[0]) / 2)
+            mid_y = int((p1[1] + p3[1]) / 2)
+            cv2.putText(frame, f"{angle:.1f}°", (mid_x, mid_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
+        
+        # Draw angle between thumb and index finger
+        index_mcp = mcp_points[0]
+        self.draw_angle_arc(frame, thumb_cmc, thumb_tip, index_mcp, color=(255, 165, 0))
+        
+        # Calculate thumb-index angle for display
+        v1 = [thumb_tip[0] - thumb_cmc[0], thumb_tip[1] - thumb_cmc[1]]
+        v2 = [index_mcp[0] - wrist[0], index_mcp[1] - wrist[1]]
+        
+        # Calculate dot product and magnitudes
+        dot = v1[0]*v2[0] + v1[1]*v2[1]
+        mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
+        mag2 = math.sqrt(v2[0]**2 + v2[1]**2)
+        
+        # Avoid division by zero
+        if mag1 * mag2 > 0.1:
+            cos_angle = dot / (mag1 * mag2)
+            cos_angle = max(min(cos_angle, 1.0), -1.0)  # Clamp to avoid domain errors
+            angle = math.degrees(math.acos(cos_angle))
+            
+            # Display thumb-index angle
+            mid_x = int((thumb_tip[0] + index_mcp[0]) / 2)
+            mid_y = int((thumb_tip[1] + index_mcp[1]) / 2)
+            cv2.putText(frame, f"T-I: {angle:.1f}°", (mid_x, mid_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2, cv2.LINE_AA)
+
+    def draw_angle_arc(self, frame, center, point1, point2, color=(0, 255, 255), radius=30):
+        """
+        Draw an arc to visualize an angle
+        
+        Args:
+            frame: OpenCV image frame
+            center: Center point (common point of the angle)
+            point1: First point defining the angle
+            point2: Second point defining the angle
+            color: RGB color tuple
+            radius: Radius of the arc in pixels
+        """
+        # Calculate vectors
+        v1 = [point1[0] - center[0], point1[1] - center[1]]
+        v2 = [point2[0] - center[0], point2[1] - center[1]]
+        
+        # Calculate magnitudes
+        mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
+        mag2 = math.sqrt(v2[0]**2 + v2[1]**2)
+        
+        # Avoid division by zero
+        if mag1 * mag2 < 0.1:
+            return
+        
+        # Calculate angles to x-axis
+        angle1 = math.degrees(math.atan2(v1[1], v1[0]))
+        angle2 = math.degrees(math.atan2(v2[1], v2[0]))
+        
+        # Ensure proper arc drawing with correct start and end angles
+        start_angle = angle1
+        end_angle = angle2
+        
+        # Adjust angles for OpenCV's ellipse function
+        if end_angle < start_angle:
+            end_angle += 360
+        
+        # Draw arc
+        cv2.ellipse(frame, center, (radius, radius), 0, start_angle, end_angle, color, 2)
             
     def close(self):
         """Release resources"""
