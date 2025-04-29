@@ -2,9 +2,6 @@ import mediapipe as mp
 import numpy as np
 import cv2
 import math
-import time
-import threading
-import inspect
 
 class HandGesture:
     """Base class for hand gesture recognition"""
@@ -34,6 +31,8 @@ class OpenHandGesture(HandGesture):
     def __init__(self):
         self.name = "Open Hand"
         
+        # Import math module if needed for angular calculations
+        import math
         self.math = math
     
     def recognize(self, hand_landmarks):
@@ -318,7 +317,7 @@ class ThumbTouchAllFingersGesture(HandGesture):
     
     def recognize(self, hand_landmarks, current_time=None):
         """
-        Check if the thumb has touched all fingers in sequence, not simultaneously
+        Check if the thumb has touched all fingers in sequence
         
         Args:
             hand_landmarks: MediaPipe hand landmarks
@@ -328,6 +327,7 @@ class ThumbTouchAllFingersGesture(HandGesture):
             bool: True if gesture is recognized, False otherwise
         """
         if current_time is None:
+            import time
             current_time = time.time()
             
         # If gesture was already completed and we're in display period
@@ -342,24 +342,13 @@ class ThumbTouchAllFingersGesture(HandGesture):
         # Finger tip landmark indices
         finger_tips = [8, 12, 16, 20]  # Index, Middle, Ring, Pinky
         
-        # Check how many fingers are currently touching the thumb
-        currently_touching = [self.is_thumb_touching_finger(hand_landmarks, tip) for tip in finger_tips]
-        touching_count = sum(currently_touching)
-        
-        # If more than one finger is touching, it's not a valid sequence
-        if touching_count > 1:
-            self.reset()
-            return False
-        
         # Start tracking sequence when first finger is touched
         if self.sequence_start_time is None and self.is_thumb_touching_finger(hand_landmarks, finger_tips[0]):
-            # Make sure other fingers are not touching
-            if touching_count == 1:
-                self.sequence_start_time = current_time
-                self.finger_touched[0] = True
-                self.current_finger_idx = 1  # Next expect the middle finger
+            self.sequence_start_time = current_time
+            self.finger_touched[0] = True
+            self.current_finger_idx = 1  # Next expect the middle finger
             return False
-                
+            
         # Check for timeout if sequence has started
         if self.sequence_start_time is not None:
             if current_time - self.sequence_start_time > self.sequence_timeout:
@@ -368,10 +357,8 @@ class ThumbTouchAllFingersGesture(HandGesture):
         
         # If sequence has started, check for next finger in sequence
         if self.sequence_start_time is not None and self.current_finger_idx < 4:
-            # Check if the expected next finger is being touched (and ONLY that finger)
-            expected_finger_touching = self.is_thumb_touching_finger(hand_landmarks, finger_tips[self.current_finger_idx])
-            
-            if expected_finger_touching and touching_count == 1:
+            # Check if the expected next finger is being touched
+            if self.is_thumb_touching_finger(hand_landmarks, finger_tips[self.current_finger_idx]):
                 self.finger_touched[self.current_finger_idx] = True
                 self.current_finger_idx += 1  # Move to next finger
                 
@@ -382,9 +369,9 @@ class ThumbTouchAllFingersGesture(HandGesture):
                     return True
             
             # Check if a finger out of sequence is being touched
-            elif touching_count > 0:
-                for i in range(4):
-                    if i != self.current_finger_idx and self.is_thumb_touching_finger(hand_landmarks, finger_tips[i]):
+            for i in range(4):
+                if i != self.current_finger_idx and not self.finger_touched[i]:
+                    if self.is_thumb_touching_finger(hand_landmarks, finger_tips[i]):
                         # Out of sequence touch - reset
                         self.reset()
                         return False
@@ -403,273 +390,61 @@ class ThumbTouchAllFingersGesture(HandGesture):
         touched_count = sum(1 for touched in self.finger_touched if touched)
         return f"{touched_count}/4 fingers"
 
-
-class CylindricalGraspGesture(HandGesture):
-    """Gesture for cylindrical grasp (all digits flexed in a C-shape as if grasping a cylinder)"""
+class PointingGesture(HandGesture):
+    """Gesture for pointing (index finger extended, others curled)"""
     
     def __init__(self):
-        self.name = "Cylindrical Grasp"
-        self.math = math
+        self.name = "Pointing"
     
     def recognize(self, hand_landmarks):
-        """
-        Recognizes the cylindrical grasp gesture based on clinical specifications.
+        """Checks if index finger is extended while other fingers are curled."""
         
-        For a cylindrical grasp:
-        - All fingers are flexed in a C-shape around an imaginary cylindrical object
-        - MCP joints flex to 45-60°
-        - PIP and DIP joints flex to 40-50°
-        - Thumb opposes the ulnar side of the middle finger's proximal phalanx
+        # Landmark indices for index finger
+        INDEX_TIP = 8
+        INDEX_PIP = 7
+        INDEX_MCP = 6
         
-        Args:
-            hand_landmarks: MediaPipe hand landmarks
-            
-        Returns:
-            bool: True if gesture is recognized, False otherwise
-        """
-        # Landmark indices
-        WRIST = 0
-        THUMB_CMC = 1  # Carpometacarpal joint
-        THUMB_MCP = 2  # Metacarpophalangeal joint
-        THUMB_IP = 3   # Interphalangeal joint
-        THUMB_TIP = 4
+        # Other fingertips
+        OTHER_TIPS = [4, 12, 16, 20]  # Thumb, Middle, Ring, Pinky
+        OTHER_BASES = [2, 10, 14, 18]  # Respective MCP joints
         
-        # Finger base (MCP), PIP, DIP and tips
-        INDEX_MCP, INDEX_PIP, INDEX_DIP, INDEX_TIP = 5, 6, 7, 8
-        MIDDLE_MCP, MIDDLE_PIP, MIDDLE_DIP, MIDDLE_TIP = 9, 10, 11, 12
-        RING_MCP, RING_PIP, RING_DIP, RING_TIP = 13, 14, 15, 16
-        PINKY_MCP, PINKY_PIP, PINKY_DIP, PINKY_TIP = 17, 18, 19, 20
+        tolerance = 0.05  # Tolerance for natural variations
         
-        # Finger groups for easier iteration
-        MCPs = [INDEX_MCP, MIDDLE_MCP, RING_MCP, PINKY_MCP]
-        PIPs = [INDEX_PIP, MIDDLE_PIP, RING_PIP, PINKY_PIP]
-        DIPs = [INDEX_DIP, MIDDLE_DIP, RING_DIP, PINKY_DIP]
-        TIPS = [INDEX_TIP, MIDDLE_TIP, RING_TIP, PINKY_TIP]
+        # 1. Check if index finger is extended
+        index_tip_y = hand_landmarks.landmark[INDEX_TIP].y
+        index_pip_y = hand_landmarks.landmark[INDEX_PIP].y
+        index_mcp_y = hand_landmarks.landmark[INDEX_MCP].y
         
-        # Calculate hand scale to normalize distance thresholds
-        wrist_point = [
-            hand_landmarks.landmark[WRIST].x,
-            hand_landmarks.landmark[WRIST].y,
-            hand_landmarks.landmark[WRIST].z
-        ]
-        middle_mcp_point = [
-            hand_landmarks.landmark[MIDDLE_MCP].x,
-            hand_landmarks.landmark[MIDDLE_MCP].y,
-            hand_landmarks.landmark[MIDDLE_MCP].z
-        ]
-        hand_scale = self.calculate_3d_distance(wrist_point, middle_mcp_point)
-        
-        # Check if the hand is in a cylindrical grasp configuration
-        
-        # 1. Check MCP joint flexion angles (should be 45-60°)
-        for mcp in MCPs:
-            # Calculate vectors for MCP angle
-            mcp_point = hand_landmarks.landmark[mcp]
-            pip_point = hand_landmarks.landmark[mcp + 1]  # PIP is always MCP + 1
-            palm_direction = self.get_palm_direction(hand_landmarks)
-            
-            # Vector from MCP to PIP
-            mcp_to_pip = [
-                pip_point.x - mcp_point.x,
-                pip_point.y - mcp_point.y,
-                pip_point.z - mcp_point.z
-            ]
-            
-            # Calculate angle between palm direction and finger direction
-            angle = self.calculate_angle(palm_direction, mcp_to_pip)
-            
-            # Convert to joint angle (90° - angle between vectors)
-            joint_angle = 90 - angle
-            
-            # MCP joints should flex to 45-60°
-            if not (40 <= joint_angle <= 65):  # Slightly wider range for tolerance
-                return False
-        
-        # 2. Check PIP joint flexion angles (should be 40-50°)
-        for pip in PIPs:
-            pip_angle = self.calculate_joint_angle(hand_landmarks, pip-1, pip, pip+1)
-            if not (35 <= pip_angle <= 55):  # Slightly wider range for tolerance
-                return False
-        
-        # 3. Check DIP joint flexion angles (should be 40-50°)
-        for dip in DIPs:
-            dip_angle = self.calculate_joint_angle(hand_landmarks, dip-1, dip, dip+1)
-            if not (35 <= dip_angle <= 55):  # Slightly wider range for tolerance
-                return False
-        
-        # 4. Check thumb opposition to middle finger's proximal phalanx
-        thumb_tip = [
-            hand_landmarks.landmark[THUMB_TIP].x,
-            hand_landmarks.landmark[THUMB_TIP].y,
-            hand_landmarks.landmark[THUMB_TIP].z
-        ]
-        
-        middle_proximal = [
-            hand_landmarks.landmark[MIDDLE_MCP].x,
-            hand_landmarks.landmark[MIDDLE_MCP].y,
-            hand_landmarks.landmark[MIDDLE_MCP].z
-        ]
-        
-        # Distance between thumb tip and middle finger's proximal phalanx
-        thumb_to_middle_dist = self.calculate_3d_distance(thumb_tip, middle_proximal)
-        
-        # The distance should be within a reasonable range based on hand scale
-        # Optimal spacing is mentioned as 3.5-4.2 cm, but we need to normalize to hand scale
-        optimal_min = 0.3 * hand_scale
-        optimal_max = 0.5 * hand_scale
-        
-        if not (optimal_min <= thumb_to_middle_dist <= optimal_max):
+        if not (index_tip_y < index_pip_y < index_mcp_y):
             return False
         
-        # 5. Check C-shape formation of fingers
-        # For a proper C-shape, fingertips should be closer to the palm than PIPs
-        for tip, pip, mcp in zip(TIPS, PIPs, MCPs):
-            tip_point = hand_landmarks.landmark[tip]
-            pip_point = hand_landmarks.landmark[pip]
-            mcp_point = hand_landmarks.landmark[mcp]
+        # 2. Check if other fingers are curled
+        for tip, base in zip(OTHER_TIPS, OTHER_BASES):
+            tip_y = hand_landmarks.landmark[tip].y
+            base_y = hand_landmarks.landmark[base].y
             
-            # Get vector from palm center to fingertip
-            palm_center = self.calculate_palm_center(hand_landmarks)
-            palm_to_tip = [
-                tip_point.x - palm_center[0],
-                tip_point.y - palm_center[1],
-                tip_point.z - palm_center[2]
-            ]
-            
-            # Get vector from palm center to PIP
-            palm_to_pip = [
-                pip_point.x - palm_center[0],
-                pip_point.y - palm_center[1],
-                pip_point.z - palm_center[2]
-            ]
-            
-            # Distance from palm to tip should be less than distance from palm to PIP
-            # This ensures the C-shape curling of fingers
-            palm_tip_dist = self.calculate_vector_magnitude(palm_to_tip)
-            palm_pip_dist = self.calculate_vector_magnitude(palm_to_pip)
-            
-            if palm_tip_dist >= palm_pip_dist:
-                return False
+            # Special case for thumb
+            if tip == 4:
+                # For thumb, we check that it's not fully extended
+                thumb_tip = hand_landmarks.landmark[4]
+                thumb_ip = hand_landmarks.landmark[3]
+                thumb_mcp = hand_landmarks.landmark[2]
+                thumb_cmc = hand_landmarks.landmark[1]
+                
+                # Calculate distance between thumb tip and index finger base to check if thumb is close
+                thumb_tip_x = thumb_tip.x
+                index_base_x = hand_landmarks.landmark[5].x  # Index finger base
+                
+                # Thumb should not be extended away from hand
+                distance = ((thumb_tip_x - index_base_x)**2)**0.5
+                if distance > 0.1:  # Arbitrary threshold, may need adjustment
+                    return False
+            else:
+                # For all other fingers (middle, ring, pinky), ensure they're curled
+                if tip_y <= base_y + tolerance:  # Adding tolerance for minor variations
+                    return False
         
-        # 6. Check thumb CMC joint adduction (30-35° of palmar adduction)
-        # This is approximated by checking the thumb's position relative to the index finger
-        thumb_tip = hand_landmarks.landmark[THUMB_TIP]
-        index_mcp = hand_landmarks.landmark[INDEX_MCP]
-        
-        # For a cylindrical grasp, thumb tip should be closer to the palm than extended
-        if thumb_tip.z >= index_mcp.z:
-            return False
-        
-        # If all checks pass, it's a cylindrical grasp
         return True
-    
-    def calculate_3d_distance(self, point1, point2):
-        """Calculate Euclidean distance between two 3D points"""
-        return ((point1[0] - point2[0])**2 + 
-                (point1[1] - point2[1])**2 + 
-                (point1[2] - point2[2])**2)**0.5
-    
-    def calculate_vector_magnitude(self, vector):
-        """Calculate the magnitude of a 3D vector"""
-        return (vector[0]**2 + vector[1]**2 + vector[2]**2)**0.5
-    
-    def calculate_angle(self, vector1, vector2):
-        """Calculate angle between two vectors in degrees"""
-        # Calculate the dot product
-        dot_product = (vector1[0] * vector2[0] + 
-                       vector1[1] * vector2[1] + 
-                       vector1[2] * vector2[2])
-        
-        # Calculate the magnitudes
-        mag1 = self.calculate_vector_magnitude(vector1)
-        mag2 = self.calculate_vector_magnitude(vector2)
-        
-        # Avoid division by zero
-        if mag1 * mag2 == 0:
-            return 0
-            
-        cos_angle = dot_product / (mag1 * mag2)
-        
-        # Ensure the cosine is within valid range (-1 to 1)
-        cos_angle = max(min(cos_angle, 1.0), -1.0)
-        
-        # Convert to angle in degrees
-        return self.math.degrees(self.math.acos(cos_angle))
-    
-    def calculate_joint_angle(self, hand_landmarks, prev_idx, curr_idx, next_idx):
-        """Calculate the angle at a joint in degrees"""
-        prev_point = hand_landmarks.landmark[prev_idx]
-        curr_point = hand_landmarks.landmark[curr_idx]
-        next_point = hand_landmarks.landmark[next_idx]
-        
-        # Vector from current joint to previous joint
-        vector1 = [
-            prev_point.x - curr_point.x,
-            prev_point.y - curr_point.y,
-            prev_point.z - curr_point.z
-        ]
-        
-        # Vector from current joint to next joint
-        vector2 = [
-            next_point.x - curr_point.x,
-            next_point.y - curr_point.y,
-            next_point.z - curr_point.z
-        ]
-        
-        # Calculate angle between vectors
-        angle = self.calculate_angle(vector1, vector2)
-        
-        # Return the supplement of the angle to get the joint angle
-        return 180 - angle
-    
-    def get_palm_direction(self, hand_landmarks):
-        """Calculate the palm normal direction vector"""
-        # Use index, middle, and pinky MCP joints to define the palm plane
-        index_mcp = hand_landmarks.landmark[5]
-        middle_mcp = hand_landmarks.landmark[9]
-        pinky_mcp = hand_landmarks.landmark[17]
-        
-        # Create vectors in the palm plane
-        vector1 = [
-            middle_mcp.x - index_mcp.x,
-            middle_mcp.y - index_mcp.y,
-            middle_mcp.z - index_mcp.z
-        ]
-        
-        vector2 = [
-            pinky_mcp.x - middle_mcp.x,
-            pinky_mcp.y - middle_mcp.y,
-            pinky_mcp.z - middle_mcp.z
-        ]
-        
-        # Calculate cross product to get palm normal
-        palm_normal = [
-            vector1[1] * vector2[2] - vector1[2] * vector2[1],
-            vector1[2] * vector2[0] - vector1[0] * vector2[2],
-            vector1[0] * vector2[1] - vector1[1] * vector2[0]
-        ]
-        
-        # Normalize the vector
-        magnitude = self.calculate_vector_magnitude(palm_normal)
-        if magnitude > 0:
-            palm_normal = [
-                palm_normal[0] / magnitude,
-                palm_normal[1] / magnitude,
-                palm_normal[2] / magnitude
-            ]
-            
-        return palm_normal
-    
-    def calculate_palm_center(self, hand_landmarks):
-        """Calculate the approximate center of the palm"""
-        # Use the average position of MCP joints as palm center
-        mcp_indices = [5, 9, 13, 17]  # Index, Middle, Ring, Pinky MCPs
-        
-        sum_x = sum(hand_landmarks.landmark[idx].x for idx in mcp_indices)
-        sum_y = sum(hand_landmarks.landmark[idx].y for idx in mcp_indices)
-        sum_z = sum(hand_landmarks.landmark[idx].z for idx in mcp_indices)
-        
-        return [sum_x / len(mcp_indices), sum_y / len(mcp_indices), sum_z / len(mcp_indices)]
 
 
 class GestureRecognizer:
@@ -690,8 +465,8 @@ class GestureRecognizer:
         
         # Register default gestures
         self.register_gesture(OpenHandGesture())
-        self.register_gesture(ThumbTouchAllFingersGesture())
-        self.register_gesture(CylindricalGraspGesture())
+        self.register_gesture(ThumbTouchAllFingersGesture())  # Replace ClosedFistGesture
+        self.register_gesture(PointingGesture())
     
     def register_gesture(self, gesture):
         """Add a new gesture to the recognizer"""
@@ -715,6 +490,7 @@ class GestureRecognizer:
         Returns:
             tuple: (recognized: bool, gesture_name: str, progress: str)
         """
+        import time
         if current_time is None:
             current_time = time.time()
             
@@ -723,6 +499,7 @@ class GestureRecognizer:
             recognized = False
             if hasattr(gesture, 'recognize') and callable(getattr(gesture, 'recognize')):
                 # Check if the recognize method accepts a time parameter
+                import inspect
                 params = inspect.signature(gesture.recognize).parameters
                 if len(params) > 1:
                     recognized = gesture.recognize(hand_landmarks, current_time)
@@ -749,6 +526,7 @@ class GestureRecognizer:
         Returns:
             dict: Keypoints and recognition results
         """
+        import time
         current_time = time.time()
         
         # Convert frame to RGB
@@ -810,8 +588,9 @@ class GestureRecognizer:
         self.mp_drawing.draw_landmarks(frame, hand_landmarks, self.mp_hands.HAND_CONNECTIONS)
     
     def process_video(self, cap):
-        """Generator function to process video frames with angle visualization"""
-
+        """Generator function to process video frames"""
+        import time
+        
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -840,28 +619,8 @@ class GestureRecognizer:
                         self.last_completed_gestures.remove(gesture_name)
 
             if result.multi_hand_landmarks:
-                for hand_idx, hand_landmarks in enumerate(result.multi_hand_landmarks):
-                    # Draw MediaPipe landmarks
+                for hand_landmarks in result.multi_hand_landmarks:
                     self.draw_landmarks(frame, hand_landmarks)
-                    
-                    # Draw our custom angle visualization
-                    self.draw_angles_visualization(frame, hand_landmarks)
-                    
-                    # Calculate finger angles for numerical display
-                    angles = self.calculate_finger_angles(hand_landmarks)
-                    
-                    # Create a semi-transparent box for angle display
-                    overlay = frame.copy()
-                    cv2.rectangle(overlay, (10, 130), (250, 290), (0, 0, 0), -1)
-                    cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
-                    
-                    # Display angles on the frame in a box
-                    angle_y_position = 160
-                    for angle_name, angle_value in angles.items():
-                        text = f"{angle_name}: {angle_value:.1f}°"
-                        cv2.putText(frame, text, (20, angle_y_position), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2, cv2.LINE_AA)
-                        angle_y_position += 30
                     
                     # Recognize the gesture
                     recognized, gesture_name, progress = self.recognize_gesture(hand_landmarks, current_time)
@@ -881,10 +640,13 @@ class GestureRecognizer:
                             if thumb_gesture:
                                 # Schedule a reset after the display time
                                 def reset_later():
+                                    import threading
+                                    import time
                                     time.sleep(3.0)  # Wait for display duration
                                     thumb_gesture.reset()
                                 
                                 # Start a thread to reset the gesture after display time
+                                import threading
                                 threading.Thread(target=reset_later).start()
                         
                         if progress:
@@ -915,232 +677,6 @@ class GestureRecognizer:
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3, cv2.LINE_AA)
 
             yield frame, regular_gestures
-
-    def calculate_finger_angles(self, hand_landmarks):
-        """
-        Calculate angles between adjacent fingers
-        
-        Args:
-            hand_landmarks: MediaPipe hand landmarks
-            
-        Returns:
-            dict: Dictionary of angles between finger pairs
-        """
-        # Finger MCP (base) joints
-        mcps = [5, 9, 13, 17]  # Index, Middle, Ring, Pinky
-        wrist = 0
-        
-        # Get the thumb CMC joint
-        thumb_cmc = 1
-        
-        # Dictionary to store angles
-        angles = {}
-        
-        # Calculate angles between adjacent fingers
-        for i in range(len(mcps) - 1):
-            # Get current and next finger MCP points
-            current_mcp = hand_landmarks.landmark[mcps[i]]
-            next_mcp = hand_landmarks.landmark[mcps[i + 1]]
-            
-            # Create vectors from wrist to MCPs
-            wrist_point = hand_landmarks.landmark[wrist]
-            vector1 = [
-                current_mcp.x - wrist_point.x,
-                current_mcp.y - wrist_point.y,
-                current_mcp.z - wrist_point.z
-            ]
-            
-            vector2 = [
-                next_mcp.x - wrist_point.x,
-                next_mcp.y - wrist_point.y,
-                next_mcp.z - wrist_point.z
-            ]
-            
-            # Calculate angle between vectors
-            angle = self.calculate_angle(vector1, vector2)
-            
-            # Store the angle between these fingers
-            finger_names = ["index-middle", "middle-ring", "ring-pinky"]
-            angles[finger_names[i]] = angle
-        
-        # Calculate angle between thumb and index finger
-        thumb_cmc_point = hand_landmarks.landmark[thumb_cmc]
-        index_mcp = hand_landmarks.landmark[mcps[0]]
-        
-        thumb_vector = [
-            hand_landmarks.landmark[4].x - thumb_cmc_point.x,  # Thumb tip to CMC
-            hand_landmarks.landmark[4].y - thumb_cmc_point.y,
-            hand_landmarks.landmark[4].z - thumb_cmc_point.z
-        ]
-        
-        index_vector = [
-            index_mcp.x - wrist_point.x,
-            index_mcp.y - wrist_point.y,
-            index_mcp.z - wrist_point.z
-        ]
-        
-        thumb_index_angle = self.calculate_angle(thumb_vector, index_vector)
-        angles["thumb-index"] = thumb_index_angle
-        
-        return angles
-
-    # Modify the calculate_angle method to handle potential invalid inputs
-    def calculate_angle(self, vector1, vector2):
-        """Calculate angle between two vectors in degrees"""
-        # Calculate the dot product
-        dot_product = (vector1[0] * vector2[0] + 
-                    vector1[1] * vector2[1] + 
-                    vector1[2] * vector2[2])
-        
-        # Calculate the magnitudes
-        mag1 = (vector1[0]**2 + vector1[1]**2 + vector1[2]**2)**0.5
-        mag2 = (vector2[0]**2 + vector2[1]**2 + vector2[2]**2)**0.5
-        
-        # Avoid division by zero
-        if mag1 * mag2 < 0.0001:  # Use small threshold to avoid numerical issues
-            return 0
-            
-        cos_angle = dot_product / (mag1 * mag2)
-        
-        # Ensure the cosine is within valid range (-1 to 1)
-        cos_angle = max(min(cos_angle, 1.0), -1.0)
-        
-        # Convert to angle in degrees
-        return math.degrees(math.acos(cos_angle))
-
-    def draw_angles_visualization(self, frame, hand_landmarks):
-        """
-        Draw visual representation of angles between fingers
-        
-        Args:
-            frame: OpenCV image frame
-            hand_landmarks: MediaPipe hand landmarks
-        """
-        # Get image dimensions
-        height, width = frame.shape[:2]
-        
-        # Draw lines between finger bases and wrist to visualize vectors
-        mcps = [5, 9, 13, 17]  # Index, Middle, Ring, Pinky MCPs
-        wrist_idx = 0
-        thumb_cmc_idx = 1
-        thumb_tip_idx = 4
-        
-        # Convert normalized coordinates to pixel coordinates
-        def get_pixel_coords(landmark):
-            return (int(landmark.x * width), int(landmark.y * height))
-        
-        # Get coordinates
-        wrist = get_pixel_coords(hand_landmarks.landmark[wrist_idx])
-        thumb_cmc = get_pixel_coords(hand_landmarks.landmark[thumb_cmc_idx])
-        thumb_tip = get_pixel_coords(hand_landmarks.landmark[thumb_tip_idx])
-        
-        # Draw lines from wrist to each MCP
-        mcp_points = []
-        for mcp_idx in mcps:
-            mcp = get_pixel_coords(hand_landmarks.landmark[mcp_idx])
-            mcp_points.append(mcp)
-            # Draw line from wrist to MCP
-            cv2.line(frame, wrist, mcp, (0, 255, 255), 2)
-        
-        # Draw line from thumb CMC to thumb tip to visualize thumb vector
-        cv2.line(frame, thumb_cmc, thumb_tip, (0, 255, 255), 2)
-        
-        # Calculate and draw angles between adjacent fingers
-        for i in range(len(mcp_points) - 1):
-            # Get points for current and next finger
-            p1 = mcp_points[i]
-            p2 = wrist
-            p3 = mcp_points[i + 1]
-            
-            # Draw arc to visualize angle
-            self.draw_angle_arc(frame, p2, p1, p3)
-            
-            # Calculate angle for display
-            v1 = [p1[0] - p2[0], p1[1] - p2[1]]
-            v2 = [p3[0] - p2[0], p3[1] - p2[1]]
-            
-            # Calculate dot product and magnitudes
-            dot = v1[0]*v2[0] + v1[1]*v2[1]
-            mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
-            mag2 = math.sqrt(v2[0]**2 + v2[1]**2)
-            
-            # Avoid division by zero
-            if mag1 * mag2 < 0.1:
-                continue
-                
-            cos_angle = dot / (mag1 * mag2)
-            cos_angle = max(min(cos_angle, 1.0), -1.0)  # Clamp to avoid domain errors
-            angle = math.degrees(math.acos(cos_angle))
-            
-            # Display angle text at midpoint
-            mid_x = int((p1[0] + p3[0]) / 2)
-            mid_y = int((p1[1] + p3[1]) / 2)
-            cv2.putText(frame, f"{angle:.1f}°", (mid_x, mid_y), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
-        
-        # Draw angle between thumb and index finger
-        index_mcp = mcp_points[0]
-        self.draw_angle_arc(frame, thumb_cmc, thumb_tip, index_mcp, color=(255, 165, 0))
-        
-        # Calculate thumb-index angle for display
-        v1 = [thumb_tip[0] - thumb_cmc[0], thumb_tip[1] - thumb_cmc[1]]
-        v2 = [index_mcp[0] - wrist[0], index_mcp[1] - wrist[1]]
-        
-        # Calculate dot product and magnitudes
-        dot = v1[0]*v2[0] + v1[1]*v2[1]
-        mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
-        mag2 = math.sqrt(v2[0]**2 + v2[1]**2)
-        
-        # Avoid division by zero
-        if mag1 * mag2 > 0.1:
-            cos_angle = dot / (mag1 * mag2)
-            cos_angle = max(min(cos_angle, 1.0), -1.0)  # Clamp to avoid domain errors
-            angle = math.degrees(math.acos(cos_angle))
-            
-            # Display thumb-index angle
-            mid_x = int((thumb_tip[0] + index_mcp[0]) / 2)
-            mid_y = int((thumb_tip[1] + index_mcp[1]) / 2)
-            cv2.putText(frame, f"T-I: {angle:.1f}°", (mid_x, mid_y), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 165, 0), 2, cv2.LINE_AA)
-
-    def draw_angle_arc(self, frame, center, point1, point2, color=(0, 255, 255), radius=30):
-        """
-        Draw an arc to visualize an angle
-        
-        Args:
-            frame: OpenCV image frame
-            center: Center point (common point of the angle)
-            point1: First point defining the angle
-            point2: Second point defining the angle
-            color: RGB color tuple
-            radius: Radius of the arc in pixels
-        """
-        # Calculate vectors
-        v1 = [point1[0] - center[0], point1[1] - center[1]]
-        v2 = [point2[0] - center[0], point2[1] - center[1]]
-        
-        # Calculate magnitudes
-        mag1 = math.sqrt(v1[0]**2 + v1[1]**2)
-        mag2 = math.sqrt(v2[0]**2 + v2[1]**2)
-        
-        # Avoid division by zero
-        if mag1 * mag2 < 0.1:
-            return
-        
-        # Calculate angles to x-axis
-        angle1 = math.degrees(math.atan2(v1[1], v1[0]))
-        angle2 = math.degrees(math.atan2(v2[1], v2[0]))
-        
-        # Ensure proper arc drawing with correct start and end angles
-        start_angle = angle1
-        end_angle = angle2
-        
-        # Adjust angles for OpenCV's ellipse function
-        if end_angle < start_angle:
-            end_angle += 360
-        
-        # Draw arc
-        cv2.ellipse(frame, center, (radius, radius), 0, start_angle, end_angle, color, 2)
             
     def close(self):
         """Release resources"""
