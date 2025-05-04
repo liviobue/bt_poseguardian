@@ -288,6 +288,7 @@ class OpenHandGesture(HandGesture):
         # Convert to angle in degrees
         return self.math.degrees(self.math.acos(cos_angle))
 
+
 class ThumbTouchAllFingersGesture(HandGesture):
     """Gesture for thumb touching all other fingers in sequence"""
     
@@ -390,62 +391,231 @@ class ThumbTouchAllFingersGesture(HandGesture):
         touched_count = sum(1 for touched in self.finger_touched if touched)
         return f"{touched_count}/4 fingers"
 
-class PointingGesture(HandGesture):
-    """Gesture for pointing (index finger extended, others curled)"""
+
+class CylindricalGraspGesture(HandGesture):
+    """Gesture for cylindrical grasp (all fingers curled as if holding a cylinder)"""
     
     def __init__(self):
-        self.name = "Pointing"
+        self.name = "Cylindrical Grasp"
     
     def recognize(self, hand_landmarks):
-        """Checks if index finger is extended while other fingers are curled."""
+        """Checks if all fingers are curled in a cylindrical grasp pattern."""
         
-        # Landmark indices for index finger
-        INDEX_TIP = 8
-        INDEX_PIP = 7
-        INDEX_MCP = 6
+        # Landmark indices
+        FINGERTIPS = [4, 8, 12, 16, 20]   # Thumb, Index, Middle, Ring, Pinky
+        MIDDLE_JOINTS = [3, 7, 11, 15, 19] # PIP joints (middle of fingers)
+        BASE_JOINTS = [2, 6, 10, 14, 18]   # MCP joints (base of fingers)
+        WRIST = 0  # Wrist landmark
         
-        # Other fingertips
-        OTHER_TIPS = [4, 12, 16, 20]  # Thumb, Middle, Ring, Pinky
-        OTHER_BASES = [2, 10, 14, 18]  # Respective MCP joints
+        # Calculate hand scale to normalize distance thresholds
+        wrist_point = [
+            hand_landmarks.landmark[WRIST].x,
+            hand_landmarks.landmark[WRIST].y,
+            hand_landmarks.landmark[WRIST].z
+        ]
+        middle_mcp_point = [
+            hand_landmarks.landmark[9].x,
+            hand_landmarks.landmark[9].y,
+            hand_landmarks.landmark[9].z
+        ]
+        hand_scale = self.calculate_3d_distance(wrist_point, middle_mcp_point)
         
-        tolerance = 0.05  # Tolerance for natural variations
+        # Determine if it's a left or right hand
+        thumb_tip_x = hand_landmarks.landmark[4].x
+        pinky_tip_x = hand_landmarks.landmark[20].x
+        is_right_hand = thumb_tip_x < pinky_tip_x
         
-        # 1. Check if index finger is extended
-        index_tip_y = hand_landmarks.landmark[INDEX_TIP].y
-        index_pip_y = hand_landmarks.landmark[INDEX_PIP].y
-        index_mcp_y = hand_landmarks.landmark[INDEX_MCP].y
-        
-        if not (index_tip_y < index_pip_y < index_mcp_y):
-            return False
-        
-        # 2. Check if other fingers are curled
-        for tip, base in zip(OTHER_TIPS, OTHER_BASES):
-            tip_y = hand_landmarks.landmark[tip].y
-            base_y = hand_landmarks.landmark[base].y
+        # Check if all fingers are curled inward
+        for i, (tip, middle, base) in enumerate(zip(FINGERTIPS[1:], MIDDLE_JOINTS[1:], BASE_JOINTS[1:])):
+            # For index, middle, ring, and pinky fingers
+            tip_coords = [hand_landmarks.landmark[tip].x, 
+                         hand_landmarks.landmark[tip].y, 
+                         hand_landmarks.landmark[tip].z]
             
-            # Special case for thumb
-            if tip == 4:
-                # For thumb, we check that it's not fully extended
-                thumb_tip = hand_landmarks.landmark[4]
-                thumb_ip = hand_landmarks.landmark[3]
-                thumb_mcp = hand_landmarks.landmark[2]
-                thumb_cmc = hand_landmarks.landmark[1]
-                
-                # Calculate distance between thumb tip and index finger base to check if thumb is close
-                thumb_tip_x = thumb_tip.x
-                index_base_x = hand_landmarks.landmark[5].x  # Index finger base
-                
-                # Thumb should not be extended away from hand
-                distance = ((thumb_tip_x - index_base_x)**2)**0.5
-                if distance > 0.1:  # Arbitrary threshold, may need adjustment
-                    return False
-            else:
-                # For all other fingers (middle, ring, pinky), ensure they're curled
-                if tip_y <= base_y + tolerance:  # Adding tolerance for minor variations
-                    return False
+            middle_coords = [hand_landmarks.landmark[middle].x, 
+                            hand_landmarks.landmark[middle].y, 
+                            hand_landmarks.landmark[middle].z]
+            
+            base_coords = [hand_landmarks.landmark[base].x, 
+                          hand_landmarks.landmark[base].y, 
+                          hand_landmarks.landmark[base].z]
+            
+            # Check if fingertip is below the middle joint in y-coordinate
+            # In a grasp, fingertips should be closer to palm than the PIP joints
+            if hand_landmarks.landmark[tip].y < hand_landmarks.landmark[middle].y:
+                return False
+            
+            # Check if fingers are curled toward palm
+            # Calculate distance from fingertip to wrist
+            tip_to_wrist_dist = self.calculate_3d_distance(
+                tip_coords, 
+                [hand_landmarks.landmark[WRIST].x, 
+                 hand_landmarks.landmark[WRIST].y, 
+                 hand_landmarks.landmark[WRIST].z]
+            )
+            
+            # Calculate distance from base to wrist
+            base_to_wrist_dist = self.calculate_3d_distance(
+                base_coords, 
+                [hand_landmarks.landmark[WRIST].x, 
+                 hand_landmarks.landmark[WRIST].y, 
+                 hand_landmarks.landmark[WRIST].z]
+            )
+            
+            # In a grasp, fingertips should be closer to palm center than finger bases
+            if tip_to_wrist_dist > base_to_wrist_dist:
+                return False
         
+        # Special check for thumb position
+        thumb_tip = [hand_landmarks.landmark[4].x, 
+                    hand_landmarks.landmark[4].y, 
+                    hand_landmarks.landmark[4].z]
+        
+        index_base = [hand_landmarks.landmark[5].x, 
+                     hand_landmarks.landmark[5].y, 
+                     hand_landmarks.landmark[5].z]
+        
+        # Thumb should be positioned close to index finger base in a cylindrical grasp
+        thumb_to_index_dist = self.calculate_3d_distance(thumb_tip, index_base)
+        
+        # Threshold based on hand scale
+        if thumb_to_index_dist > 0.2 * hand_scale:
+            return False
+            
+        # Check thumb opposition - thumb should be on the opposite side of fingers
+        if is_right_hand:
+            # For right hand, thumb x should be less than index base x
+            if hand_landmarks.landmark[4].x > hand_landmarks.landmark[5].x:
+                return False
+        else:
+            # For left hand, thumb x should be greater than index base x
+            if hand_landmarks.landmark[4].x < hand_landmarks.landmark[5].x:
+                return False
+        
+        # All checks passed, it's a cylindrical grasp
         return True
+    
+    def calculate_3d_distance(self, point1, point2):
+        """Calculate Euclidean distance between two 3D points"""
+        return ((point1[0] - point2[0])**2 + 
+                (point1[1] - point2[1])**2 + 
+                (point1[2] - point2[2])**2)**0.5
 
+
+class ThumbTouchAllFingersGesture(HandGesture):
+    """Gesture for thumb touching all other fingers in sequence"""
+    
+    def __init__(self):
+        self.name = "Thumb Touch All"
+        self.finger_touched = [False, False, False, False]  # Index, Middle, Ring, Pinky
+        self.current_finger_idx = 0  # Track which finger should be touched next
+        self.last_touch_time = 0
+        self.display_duration = 3.0  # seconds to display the recognition message
+        self.sequence_timeout = 5.0  # seconds allowed to complete the sequence
+        self.sequence_start_time = None
+        self.completed = False
+        self.completion_time = 0
+        self.in_progress = False  # Flag to indicate gesture is currently being performed
+        self.tolerance = 0.07  # Distance tolerance for "touching" detection
+    
+    def is_thumb_touching_finger(self, hand_landmarks, finger_tip_idx):
+        """Check if thumb tip is touching another fingertip"""
+        thumb_tip = hand_landmarks.landmark[4]  # Thumb tip
+        finger_tip = hand_landmarks.landmark[finger_tip_idx]
+        
+        # Calculate 3D distance between thumb tip and fingertip
+        distance = ((thumb_tip.x - finger_tip.x)**2 + 
+                    (thumb_tip.y - finger_tip.y)**2 + 
+                    (thumb_tip.z - finger_tip.z)**2)**0.5
+        
+        # Check against the tolerance threshold
+        return distance < self.tolerance
+    
+    def recognize(self, hand_landmarks, current_time=None):
+        """
+        Check if the thumb has touched all fingers in sequence
+        
+        Args:
+            hand_landmarks: MediaPipe hand landmarks
+            current_time: Current timestamp for timeout tracking
+            
+        Returns:
+            bool: True if gesture is recognized or in progress, False otherwise
+        """
+        if current_time is None:
+            import time
+            current_time = time.time()
+            
+        # If gesture was already completed and we're in display period
+        if self.completed:
+            if current_time - self.completion_time < self.display_duration:
+                return True
+            else:
+                # Reset after display period to allow for a new sequence
+                self.reset()
+                return False
+        
+        # Finger tip landmark indices
+        finger_tips = [8, 12, 16, 20]  # Index, Middle, Ring, Pinky
+        
+        # Start tracking sequence when first finger is touched
+        if not self.in_progress and self.is_thumb_touching_finger(hand_landmarks, finger_tips[0]):
+            self.sequence_start_time = current_time
+            self.finger_touched[0] = True
+            self.current_finger_idx = 1  # Next expect the middle finger
+            self.in_progress = True
+            return True  # Return true to indicate gesture is being recognized
+            
+        # Check for timeout if sequence has started
+        if self.sequence_start_time is not None:
+            if current_time - self.sequence_start_time > self.sequence_timeout:
+                self.reset()  # Reset if timeout
+                return False
+        
+        # If sequence has started, check for the next finger in sequence
+        if self.in_progress and self.current_finger_idx < 4:
+            # First, check if the current expected finger is being touched
+            if self.is_thumb_touching_finger(hand_landmarks, finger_tips[self.current_finger_idx]):
+                self.finger_touched[self.current_finger_idx] = True
+                self.current_finger_idx += 1  # Move to next finger
+                
+                # If all fingers have been touched in sequence
+                if self.current_finger_idx >= 4:
+                    self.completed = True
+                    self.completion_time = current_time
+                    self.in_progress = False
+                    return True
+            
+            # Check if a finger out of sequence is being touched
+            for i in range(4):
+                if i != self.current_finger_idx and i > self.current_finger_idx:
+                    if self.is_thumb_touching_finger(hand_landmarks, finger_tips[i]):
+                        # Out of sequence touch - reset
+                        self.reset()
+                        return False
+            
+            # Still in progress
+            return True if self.in_progress else False
+                        
+        return False
+    
+    def reset(self):
+        """Reset the gesture tracking state"""
+        self.finger_touched = [False, False, False, False]
+        self.current_finger_idx = 0
+        self.sequence_start_time = None
+        self.completed = False
+        self.in_progress = False
+
+    def get_progress(self):
+        """Return the progress of the gesture sequence"""
+        touched_count = sum(1 for touched in self.finger_touched if touched)
+        return f"{touched_count}/4 fingers"
+        
+    def is_in_progress(self):
+        """Return whether the gesture is currently in progress"""
+        return self.in_progress or self.completed
+        
 
 class GestureRecognizer:
     """Main class for recognizing multiple hand gestures"""
@@ -462,11 +632,13 @@ class GestureRecognizer:
         self.recognized_gestures = []
         self.gesture_display_times = {}
         self.last_completed_gestures = set()  # Track which gestures were completed
+        self.active_gesture = None  # Track the currently active gesture (if any)
+        self.holding_object = False  # Track if the user appears to be holding an object
         
-        # Register default gestures
+        # Register default gestures in order of priority
+        self.register_gesture(CylindricalGraspGesture())  # Highest priority
         self.register_gesture(OpenHandGesture())
-        self.register_gesture(ThumbTouchAllFingersGesture())  # Replace ClosedFistGesture
-        self.register_gesture(PointingGesture())
+        self.register_gesture(ThumbTouchAllFingersGesture())  # Lowest priority
     
     def register_gesture(self, gesture):
         """Add a new gesture to the recognizer"""
@@ -488,13 +660,86 @@ class GestureRecognizer:
             current_time: Current timestamp
             
         Returns:
-            tuple: (recognized: bool, gesture_name: str, progress: str)
+            tuple: (recognized: bool, gesture_name: str, progress: str, is_running: bool)
         """
         import time
         if current_time is None:
             current_time = time.time()
+        
+        # First, check if we have an active gesture in progress
+        if self.active_gesture is not None:
+            gesture = self.get_gesture_by_name(self.active_gesture)
             
-        for gesture in self.gestures:
+            if gesture is not None and hasattr(gesture, 'recognize') and callable(getattr(gesture, 'recognize')):
+                # Pass current time to gesture recognizer for timing-based gestures
+                import inspect
+                params = inspect.signature(gesture.recognize).parameters
+                
+                if len(params) > 1:
+                    recognized = gesture.recognize(hand_landmarks, current_time)
+                else:
+                    recognized = gesture.recognize(hand_landmarks)
+                
+                # If still recognized or in progress
+                if recognized:
+                    # Get progress information if available
+                    progress = ""
+                    if hasattr(gesture, 'get_progress') and callable(getattr(gesture, 'get_progress')):
+                        progress = gesture.get_progress()
+                    
+                    # Check if it's still in progress or completed
+                    is_running = True
+                    if hasattr(gesture, 'is_in_progress') and callable(getattr(gesture, 'is_in_progress')):
+                        is_running = gesture.is_in_progress()
+                    
+                    # If completed or no longer in progress, clear active gesture
+                    if not is_running and hasattr(gesture, 'completed') and not gesture.completed:
+                        self.active_gesture = None
+                    
+                    return True, gesture.get_name(), progress, is_running
+                else:
+                    # No longer recognized, clear active gesture
+                    self.active_gesture = None
+        
+        # Check for cylindrical grasp first (higher priority)
+        # This is intentionally kept separate from the loop below to give it highest priority
+        cylindrical_gesture = self.get_gesture_by_name("Cylindrical Grasp")
+        if cylindrical_gesture:
+            recognized = cylindrical_gesture.recognize(hand_landmarks)
+            if recognized:
+                # If cylindrical grasp is recognized, set a flag that user is holding an object
+                self.holding_object = True
+                
+                # This prevents ThumbTouchAllFingersGesture from being recognized when user is holding an object
+                return True, cylindrical_gesture.get_name(), "", False
+        else:
+            # Reset holding object flag if cylindrical grasp is not detected
+            self.holding_object = False
+            
+        # Sort gestures by priority if they have that attribute
+        sorted_gestures = sorted(
+            self.gestures, 
+            key=lambda g: getattr(g, 'priority', 5), 
+            reverse=True  # Higher priority first
+        )
+        
+        # If no active gesture or previous one ended, check all gestures in priority order
+        for gesture in sorted_gestures:
+            # Skip ThumbTouchAll if user is holding an object
+            if self.holding_object and gesture.get_name() == "Thumb Touch All":
+                continue
+                
+            # Skip if this gesture requires sequencing and not ready to start new sequence
+            if gesture.get_name() == "Thumb Touch All":
+                thumb_gesture = gesture
+                if hasattr(thumb_gesture, 'completed') and thumb_gesture.completed:
+                    # Skip if still in completion display phase
+                    continue
+            
+            # Skip if we already checked cylindrical grasp
+            if gesture.get_name() == "Cylindrical Grasp":
+                continue
+                
             # Pass current time to gesture recognizer for timing-based gestures
             recognized = False
             if hasattr(gesture, 'recognize') and callable(getattr(gesture, 'recognize')):
@@ -511,10 +756,18 @@ class GestureRecognizer:
                 progress = ""
                 if hasattr(gesture, 'get_progress') and callable(getattr(gesture, 'get_progress')):
                     progress = gesture.get_progress()
-                    
-                return True, gesture.get_name(), progress
+                
+                # Check if it's an in-progress gesture
+                is_running = False
+                if hasattr(gesture, 'is_in_progress') and callable(getattr(gesture, 'is_in_progress')):
+                    is_running = gesture.is_in_progress()
+                    if is_running:
+                        # Set as active gesture if it's in progress
+                        self.active_gesture = gesture.get_name()
+                
+                return True, gesture.get_name(), progress, is_running
         
-        return False, "Unknown", ""
+        return False, "Unknown", "", False
     
     def extract_hand_keypoints(self, frame):
         """
@@ -536,6 +789,7 @@ class GestureRecognizer:
         keypoints = []
         recognized_gestures = []
         completed_gestures = []
+        in_progress_gestures = []
         progress_info = {}
 
         # First, check if we need to keep displaying previously recognized gestures
@@ -559,15 +813,22 @@ class GestureRecognizer:
                 keypoints.append({"keypoints": hand_keypoints})
 
                 # Recognize the gesture
-                recognized, gesture_name, progress = self.recognize_gesture(hand_landmarks, current_time)
+                recognized, gesture_name, progress, is_running = self.recognize_gesture(hand_landmarks, current_time)
                 if recognized:
                     recognized_gestures.append(gesture_name)
                     
+                    if is_running:
+                        in_progress_gestures.append(gesture_name)
+                    
                     # Check if this is the "Thumb Touch All" gesture and it wasn't previously in the completed list
-                    if gesture_name == "Thumb Touch All" and gesture_name not in self.last_completed_gestures:
-                        # Add to completed list with display time
-                        self.last_completed_gestures.add(gesture_name)
-                        self.gesture_display_times[gesture_name] = current_time + 3.0  # Display for 3 seconds
+                    if gesture_name == "Thumb Touch All":
+                        thumb_gesture = self.get_gesture_by_name("Thumb Touch All")
+                        if thumb_gesture and hasattr(thumb_gesture, 'completed') and thumb_gesture.completed:
+                            if gesture_name not in self.last_completed_gestures:
+                                # Add to completed list with display time
+                                self.last_completed_gestures.add(gesture_name)
+                                self.gesture_display_times[gesture_name] = current_time + 3.0  # Display for 3 seconds
+                                completed_gestures.append(gesture_name)
                     
                     if progress:
                         progress_info[gesture_name] = progress
@@ -578,6 +839,7 @@ class GestureRecognizer:
         return {
             "recognized": len(recognized_gestures) > 0, 
             "gestures": recognized_gestures,
+            "in_progress": in_progress_gestures,
             "completed_gestures": completed_gestures,
             "hands": keypoints,
             "progress": progress_info
@@ -605,6 +867,7 @@ class GestureRecognizer:
             
             # Lists to track recognition status
             regular_gestures = []
+            in_progress_gestures = []
             completed_gestures = []
             progress_info = {}
 
@@ -623,31 +886,34 @@ class GestureRecognizer:
                     self.draw_landmarks(frame, hand_landmarks)
                     
                     # Recognize the gesture
-                    recognized, gesture_name, progress = self.recognize_gesture(hand_landmarks, current_time)
+                    recognized, gesture_name, progress, is_running = self.recognize_gesture(hand_landmarks, current_time)
                     if recognized:
-                        # Add to regular gestures list
+                        # Add to appropriate list based on status
                         regular_gestures.append(gesture_name)
                         
+                        if is_running:
+                            in_progress_gestures.append(gesture_name)
+                        
                         # Special handling for Thumb Touch All gesture
-                        if gesture_name == "Thumb Touch All" and gesture_name not in self.last_completed_gestures:
-                            # Add to completed list with display time
-                            self.last_completed_gestures.add(gesture_name)
-                            self.gesture_display_times[gesture_name] = current_time + 3.0  # Display for 3 seconds
-                            completed_gestures.append(gesture_name)
-                            
-                            # Reset the gesture after completion to allow for repeated recognition
+                        if gesture_name == "Thumb Touch All":
                             thumb_gesture = self.get_gesture_by_name("Thumb Touch All")
-                            if thumb_gesture:
-                                # Schedule a reset after the display time
-                                def reset_later():
+                            if thumb_gesture and hasattr(thumb_gesture, 'completed') and thumb_gesture.completed:
+                                if gesture_name not in self.last_completed_gestures:
+                                    # Add to completed list with display time
+                                    self.last_completed_gestures.add(gesture_name)
+                                    self.gesture_display_times[gesture_name] = current_time + 3.0  # Display for 3 seconds
+                                    completed_gestures.append(gesture_name)
+                                    
+                                    # Reset the gesture after completion to allow for repeated recognition
+                                    def reset_later():
+                                        import threading
+                                        import time
+                                        time.sleep(3.0)  # Wait for display duration
+                                        thumb_gesture.reset()
+                                    
+                                    # Start a thread to reset the gesture after display time
                                     import threading
-                                    import time
-                                    time.sleep(3.0)  # Wait for display duration
-                                    thumb_gesture.reset()
-                                
-                                # Start a thread to reset the gesture after display time
-                                import threading
-                                threading.Thread(target=reset_later).start()
+                                    threading.Thread(target=reset_later).start()
                         
                         if progress:
                             progress_info[gesture_name] = progress
@@ -664,6 +930,21 @@ class GestureRecognizer:
                 cv2.putText(frame, gesture_text, (50, 100), 
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
             
+            # Display in-progress gestures with progress info
+            if in_progress_gestures:
+                for i, gesture in enumerate(in_progress_gestures):
+                    in_progress_text = f"{gesture} IN PROGRESS"
+                    if gesture in progress_info:
+                        in_progress_text += f" - {progress_info[gesture]}"
+                    
+                    # Create a semi-transparent banner for in-progress gesture
+                    overlay = frame.copy()
+                    cv2.rectangle(overlay, (0, 150+i*50), (width, 200+i*50), (255, 165, 0), -1)
+                    cv2.addWeighted(overlay, 0.4, frame, 0.6, 0, frame)
+                    
+                    cv2.putText(frame, in_progress_text, (50, 180+i*50), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+            
             # Display completed gestures notification in a different area (bottom of frame)
             if completed_gestures:
                 # Create a semi-transparent banner at the bottom
@@ -673,7 +954,7 @@ class GestureRecognizer:
                 
                 for i, gesture in enumerate(completed_gestures):
                     # Show completion message in a larger, more prominent font
-                    cv2.putText(frame, "DONE", (width//2-230, height-60+i*30), 
+                    cv2.putText(frame, f"{gesture} DONE", (width//2-230, height-60+i*30), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3, cv2.LINE_AA)
 
             yield frame, regular_gestures
