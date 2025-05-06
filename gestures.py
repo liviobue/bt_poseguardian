@@ -289,222 +289,114 @@ class OpenHandGesture(HandGesture):
         return self.math.degrees(self.math.acos(cos_angle))
 
 
-class ThumbTouchAllFingersGesture(HandGesture):
-    """Gesture for thumb touching all other fingers in sequence"""
-    
-    def __init__(self):
-        self.name = "Thumb Touch All"
-        self.finger_touched = [False, False, False, False]  # Index, Middle, Ring, Pinky
-        self.current_finger_idx = 0  # Track which finger should be touched next
-        self.last_touch_time = 0
-        self.display_duration = 3.0  # seconds to display the recognition message
-        self.sequence_timeout = 5.0  # seconds allowed to complete the sequence
-        self.sequence_start_time = None
-        self.completed = False
-        self.completion_time = 0
-    
-    def is_thumb_touching_finger(self, hand_landmarks, finger_tip_idx):
-        """Check if thumb tip is touching another fingertip"""
-        thumb_tip = hand_landmarks.landmark[4]  # Thumb tip
-        finger_tip = hand_landmarks.landmark[finger_tip_idx]
-        
-        # Calculate 3D distance between thumb tip and fingertip
-        distance = ((thumb_tip.x - finger_tip.x)**2 + 
-                    (thumb_tip.y - finger_tip.y)**2 + 
-                    (thumb_tip.z - finger_tip.z)**2)**0.5
-        
-        # Threshold distance for "touching"
-        return distance < 0.05  # Adjust this threshold based on testing
-    
-    def recognize(self, hand_landmarks, current_time=None):
-        """
-        Check if the thumb has touched all fingers in sequence
-        
-        Args:
-            hand_landmarks: MediaPipe hand landmarks
-            current_time: Current timestamp for timeout tracking
-            
-        Returns:
-            bool: True if gesture is recognized, False otherwise
-        """
-        if current_time is None:
-            import time
-            current_time = time.time()
-            
-        # If gesture was already completed and we're in display period
-        if self.completed:
-            if current_time - self.completion_time < self.display_duration:
-                return True
-            else:
-                # Reset after display period to allow for a new sequence
-                self.reset()
-                return False
-        
-        # Finger tip landmark indices
-        finger_tips = [8, 12, 16, 20]  # Index, Middle, Ring, Pinky
-        
-        # Start tracking sequence when first finger is touched
-        if self.sequence_start_time is None and self.is_thumb_touching_finger(hand_landmarks, finger_tips[0]):
-            self.sequence_start_time = current_time
-            self.finger_touched[0] = True
-            self.current_finger_idx = 1  # Next expect the middle finger
-            return False
-            
-        # Check for timeout if sequence has started
-        if self.sequence_start_time is not None:
-            if current_time - self.sequence_start_time > self.sequence_timeout:
-                self.reset()  # Reset if timeout
-                return False
-        
-        # If sequence has started, check for next finger in sequence
-        if self.sequence_start_time is not None and self.current_finger_idx < 4:
-            # Check if the expected next finger is being touched
-            if self.is_thumb_touching_finger(hand_landmarks, finger_tips[self.current_finger_idx]):
-                self.finger_touched[self.current_finger_idx] = True
-                self.current_finger_idx += 1  # Move to next finger
-                
-                # If all fingers have been touched in sequence
-                if self.current_finger_idx >= 4:
-                    self.completed = True
-                    self.completion_time = current_time
-                    return True
-            
-            # Check if a finger out of sequence is being touched
-            for i in range(4):
-                if i != self.current_finger_idx and not self.finger_touched[i]:
-                    if self.is_thumb_touching_finger(hand_landmarks, finger_tips[i]):
-                        # Out of sequence touch - reset
-                        self.reset()
-                        return False
-                        
-        return False
-    
-    def reset(self):
-        """Reset the gesture tracking state"""
-        self.finger_touched = [False, False, False, False]
-        self.current_finger_idx = 0
-        self.sequence_start_time = None
-        self.completed = False
-
-    def get_progress(self):
-        """Return the progress of the gesture sequence"""
-        touched_count = sum(1 for touched in self.finger_touched if touched)
-        return f"{touched_count}/4 fingers"
-
-
 class CylindricalGraspGesture(HandGesture):
     """Gesture for cylindrical grasp (all fingers curled as if holding a cylinder)"""
     
     def __init__(self):
         self.name = "Cylindrical Grasp"
-        self.in_progress = False
-        self.completed = False
-        self.progress = 0  # 0-100% progress
-        self.last_update_time = 0
-        self.display_duration = 3.0  # seconds to display completion
-    
-    def calculate_curl_ratio(self, hand_landmarks, tip_idx, pip_idx, mcp_idx):
-        """Calculate how much a finger is curled (0=straight, 1=fully curled)"""
-        tip = hand_landmarks.landmark[tip_idx]
-        pip = hand_landmarks.landmark[pip_idx]
-        mcp = hand_landmarks.landmark[mcp_idx]
-        
-        # Vector from MCP to PIP
-        pip_vec = (pip.x - mcp.x, pip.y - mcp.y)
-        # Vector from PIP to tip
-        tip_vec = (tip.x - pip.x, tip.y - pip.y)
-        
-        # Calculate angle between vectors
-        angle = self.calculate_angle(pip_vec, tip_vec)
-        
-        # Normalize angle to 0-1 range (0-90 degrees)
-        return min(angle / 90.0, 1.0)
     
     def recognize(self, hand_landmarks):
         """Checks if all fingers are curled in a cylindrical grasp pattern."""
+        
         # Landmark indices
-        FINGERTIPS = [8, 12, 16, 20]   # Index, Middle, Ring, Pinky (skip thumb)
-        PIP_JOINTS = [6, 10, 14, 18]    # PIP joints
-        MCP_JOINTS = [5, 9, 13, 17]     # MCP joints
+        FINGERTIPS = [4, 8, 12, 16, 20]   # Thumb, Index, Middle, Ring, Pinky
+        MIDDLE_JOINTS = [3, 7, 11, 15, 19] # PIP joints (middle of fingers)
+        BASE_JOINTS = [2, 6, 10, 14, 18]   # MCP joints (base of fingers)
+        WRIST = 0  # Wrist landmark
         
-        # Calculate curl ratios for each finger (0=straight, 1=curled)
-        curl_ratios = [
-            self.calculate_curl_ratio(hand_landmarks, tip, pip, mcp)
-            for tip, pip, mcp in zip(FINGERTIPS, PIP_JOINTS, MCP_JOINTS)
+        # Calculate hand scale to normalize distance thresholds
+        wrist_point = [
+            hand_landmarks.landmark[WRIST].x,
+            hand_landmarks.landmark[WRIST].y,
+            hand_landmarks.landmark[WRIST].z
         ]
+        middle_mcp_point = [
+            hand_landmarks.landmark[9].x,
+            hand_landmarks.landmark[9].y,
+            hand_landmarks.landmark[9].z
+        ]
+        hand_scale = self.calculate_3d_distance(wrist_point, middle_mcp_point)
         
-        # Calculate average curl
-        avg_curl = sum(curl_ratios) / len(curl_ratios)
+        # Determine if it's a left or right hand
+        thumb_tip_x = hand_landmarks.landmark[4].x
+        pinky_tip_x = hand_landmarks.landmark[20].x
+        is_right_hand = thumb_tip_x < pinky_tip_x
         
-        # Thresholds
-        MIN_CURL = 0.6  # Average curl needed to consider grasp
-        MIN_FINGER_CURL = 0.4  # Minimum curl for individual fingers
+        # Check if all fingers are curled inward
+        for i, (tip, middle, base) in enumerate(zip(FINGERTIPS[1:], MIDDLE_JOINTS[1:], BASE_JOINTS[1:])):
+            # For index, middle, ring, and pinky fingers
+            tip_coords = [hand_landmarks.landmark[tip].x, 
+                         hand_landmarks.landmark[tip].y, 
+                         hand_landmarks.landmark[tip].z]
+            
+            middle_coords = [hand_landmarks.landmark[middle].x, 
+                            hand_landmarks.landmark[middle].y, 
+                            hand_landmarks.landmark[middle].z]
+            
+            base_coords = [hand_landmarks.landmark[base].x, 
+                          hand_landmarks.landmark[base].y, 
+                          hand_landmarks.landmark[base].z]
+            
+            # Check if fingertip is below the middle joint in y-coordinate
+            # In a grasp, fingertips should be closer to palm than the PIP joints
+            if hand_landmarks.landmark[tip].y < hand_landmarks.landmark[middle].y:
+                return False
+            
+            # Check if fingers are curled toward palm
+            # Calculate distance from fingertip to wrist
+            tip_to_wrist_dist = self.calculate_3d_distance(
+                tip_coords, 
+                [hand_landmarks.landmark[WRIST].x, 
+                 hand_landmarks.landmark[WRIST].y, 
+                 hand_landmarks.landmark[WRIST].z]
+            )
+            
+            # Calculate distance from base to wrist
+            base_to_wrist_dist = self.calculate_3d_distance(
+                base_coords, 
+                [hand_landmarks.landmark[WRIST].x, 
+                 hand_landmarks.landmark[WRIST].y, 
+                 hand_landmarks.landmark[WRIST].z]
+            )
+            
+            # In a grasp, fingertips should be closer to palm center than finger bases
+            if tip_to_wrist_dist > base_to_wrist_dist:
+                return False
         
-        # Check if all fingers meet minimum curl
-        all_fingers_curled = all(ratio >= MIN_FINGER_CURL for ratio in curl_ratios)
+        # Special check for thumb position
+        thumb_tip = [hand_landmarks.landmark[4].x, 
+                    hand_landmarks.landmark[4].y, 
+                    hand_landmarks.landmark[4].z]
         
-        # Check thumb position (simplified)
-        thumb_tip = hand_landmarks.landmark[4]
-        index_mcp = hand_landmarks.landmark[5]
-        thumb_dist = self.calculate_3d_distance(
-            [thumb_tip.x, thumb_tip.y, thumb_tip.z],
-            [index_mcp.x, index_mcp.y, index_mcp.z]
-        )
+        index_base = [hand_landmarks.landmark[5].x, 
+                     hand_landmarks.landmark[5].y, 
+                     hand_landmarks.landmark[5].z]
         
-        # Calculate hand scale for distance normalization
-        wrist = hand_landmarks.landmark[0]
-        middle_mcp = hand_landmarks.landmark[9]
-        hand_scale = self.calculate_3d_distance(
-            [wrist.x, wrist.y, wrist.z],
-            [middle_mcp.x, middle_mcp.y, middle_mcp.z]
-        )
+        # Thumb should be positioned close to index finger base in a cylindrical grasp
+        thumb_to_index_dist = self.calculate_3d_distance(thumb_tip, index_base)
         
-        # Thumb should be close to index base
-        thumb_close = thumb_dist < (0.25 * hand_scale)
-        
-        # Determine if grasp is in progress or completed
-        if avg_curl >= MIN_CURL and all_fingers_curled and thumb_close:
-            self.completed = True
-            self.in_progress = False
-            self.progress = 100
-            return True
-        elif avg_curl >= 0.3:  # Partial grasp
-            self.in_progress = True
-            self.completed = False
-            self.progress = int(avg_curl * 100)
-            return True
-        else:
-            self.in_progress = False
-            self.completed = False
-            self.progress = 0
+        # Threshold based on hand scale
+        if thumb_to_index_dist > 0.2 * hand_scale:
             return False
+            
+        # Check thumb opposition - thumb should be on the opposite side of fingers
+        if is_right_hand:
+            # For right hand, thumb x should be less than index base x
+            if hand_landmarks.landmark[4].x > hand_landmarks.landmark[5].x:
+                return False
+        else:
+            # For left hand, thumb x should be greater than index base x
+            if hand_landmarks.landmark[4].x < hand_landmarks.landmark[5].x:
+                return False
+        
+        # All checks passed, it's a cylindrical grasp
+        return True
     
     def calculate_3d_distance(self, point1, point2):
         """Calculate Euclidean distance between two 3D points"""
         return ((point1[0] - point2[0])**2 + 
                 (point1[1] - point2[1])**2 + 
                 (point1[2] - point2[2])**2)**0.5
-    
-    def calculate_angle(self, vector1, vector2):
-        """Calculate angle between two 2D vectors in degrees"""
-        dot_product = vector1[0] * vector2[0] + vector1[1] * vector2[1]
-        mag1 = math.sqrt(vector1[0]**2 + vector1[1]**2)
-        mag2 = math.sqrt(vector2[0]**2 + vector2[1]**2)
-        
-        if mag1 * mag2 == 0:
-            return 0
-            
-        cos_angle = dot_product / (mag1 * mag2)
-        cos_angle = max(min(cos_angle, 1.0), -1.0)
-        return math.degrees(math.acos(cos_angle))
-    
-    def get_progress(self):
-        """Return the progress of the gesture (0-100%)"""
-        return f"{self.progress}%"
-    
-    def is_in_progress(self):
-        """Return whether the gesture is currently in progress"""
-        return self.in_progress or self.completed
 
 
 class ThumbTouchAllFingersGesture(HandGesture):
@@ -620,7 +512,7 @@ class ThumbTouchAllFingersGesture(HandGesture):
     def is_in_progress(self):
         """Return whether the gesture is currently in progress"""
         return self.in_progress or self.completed
-
+        
 
 class GestureRecognizer:
     """Main class for recognizing multiple hand gestures"""
