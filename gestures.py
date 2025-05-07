@@ -3,6 +3,7 @@ import numpy as np
 import cv2
 import math
 
+
 class HandGesture:
     """Base class for hand gesture recognition"""
     
@@ -25,6 +26,7 @@ class HandGesture:
         """Return the name of this gesture"""
         return self.name
 
+
 class OpenHandGesture(HandGesture):
     """Gesture for fully open hand with all fingers extended and properly spaced"""
     
@@ -32,7 +34,6 @@ class OpenHandGesture(HandGesture):
         self.name = "Open Hand"
         
         # Import math module if needed for angular calculations
-        import math
         self.math = math
     
     def recognize(self, hand_landmarks):

@@ -61,6 +61,7 @@ SUPPORTED_MIME_TYPES = [
 # Initialize Gesture Recognizer
 gesture_recognizer = GestureRecognizer()
 
+
 def calculate_similarity(text1, text2):
     """
     Calculate cosine similarity between two text strings
@@ -88,6 +89,7 @@ def calculate_similarity(text1, text2):
     except Exception as e:
         print(f"Error calculating similarity: {str(e)}")
         return 0.0
+
 
 def process_video_for_keypoints(video_path, sampling_rate=5):
     """
@@ -166,6 +168,7 @@ def process_video_for_keypoints(video_path, sampling_rate=5):
     }
     
     return video_data
+
 
 def prepare_keypoints_for_gemini(video_data):
     """
@@ -259,6 +262,7 @@ def prepare_keypoints_for_gemini(video_data):
     
     return "\n".join(text_data)
 
+
 @app.post("/process_frame")
 async def process_frame(frame: UploadFile = File(...)):
     """
@@ -291,6 +295,7 @@ async def process_frame(frame: UploadFile = File(...)):
     
     # Return the processed data
     return keypoint_data
+
 
 @app.post("/upload")
 async def upload_video(video: UploadFile = File(...)):
@@ -392,15 +397,16 @@ async def upload_video(video: UploadFile = File(...)):
         return {"response": f"Error: {str(e)}"}
     finally:
         # Clean up temp file
-        import os
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
 
 # Gracefully release resources on shutdown
 @app.on_event("shutdown")
 def shutdown_event():
     gesture_recognizer.close()
     client.close()
+
 
 if __name__ == "__main__":
     import uvicorn
