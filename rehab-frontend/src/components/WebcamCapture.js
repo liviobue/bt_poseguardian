@@ -8,6 +8,9 @@ const WebcamCapture = () => {
   const [isCapturing, setIsCapturing] = useState(false);
   const [handData, setHandData] = useState(null);
   const [gestures, setGestures] = useState([]);
+  const [inProgressGestures, setInProgressGestures] = useState([]);
+  const [completedGestures, setCompletedGestures] = useState([]);
+  const [progress, setProgress] = useState({});
   const [isRecognized, setIsRecognized] = useState(false);
   const [error, setError] = useState(null);
   const [showKeypoints, setShowKeypoints] = useState(true);
@@ -55,7 +58,7 @@ const WebcamCapture = () => {
 
     const captureInterval = setInterval(() => {
       sendFrameToBackend();
-    }, 100); // Send frame every 100 = 100ms (10fps)
+    }, 100); // Send frame every 100ms (10fps)
 
     return () => clearInterval(captureInterval);
   }, [isCapturing]);
@@ -170,9 +173,12 @@ const WebcamCapture = () => {
             { headers: { 'Content-Type': 'multipart/form-data' } }
           );
 
-          // Update state with keypoint data
+          // Update state with response data
           setHandData(response.data.hands);
           setGestures(response.data.gestures || []);
+          setInProgressGestures(response.data.in_progress || []);
+          setCompletedGestures(response.data.completed_gestures || []);
+          setProgress(response.data.progress || {});
           setIsRecognized(response.data.recognized || false);
         } catch (err) {
           console.error("Error sending frame to backend:", err);
@@ -188,9 +194,31 @@ const WebcamCapture = () => {
     setShowKeypoints(!showKeypoints);
   };
 
+  // Get exercise status with appropriate styling
+  const getExerciseStatus = (exercise) => {
+    if (completedGestures.includes(exercise)) {
+      return { text: `${exercise} (Completed)`, style: { color: '#00FF00' } };
+    }
+    if (inProgressGestures.includes(exercise)) {
+      return { text: `${exercise} (In Progress)`, style: { color: '#FFFF00' } };
+    }
+    if (gestures.includes(exercise)) {
+      return { text: `${exercise}`, style: { color: '#FFFFFF' } };
+    }
+    return { text: `${exercise} (Not Detected)`, style: { color: '#FF0000' } };
+  };
+
+  // Get progress text for Thumb Touch All
+  const getProgressText = () => {
+    if (progress['Thumb Touch All']) {
+      return `Progress: ${progress['Thumb Touch All']}`;
+    }
+    return '';
+  };
+
   return (
     <div style={containerStyle}>
-      <h2>Pose Estimation</h2>
+      <h2>Hand Rehabilitation Exercises</h2>
       
       {/* Display any errors */}
       {error && <div style={{ color: 'red', marginBottom: '10px' }}>{error}</div>}
@@ -232,9 +260,24 @@ const WebcamCapture = () => {
           <div style={{ fontWeight: 'bold' }}>
             {isRecognized ? 'Recognized' : 'Not Recognized'}
           </div>
-          {gestures.length > 0 && (
-            <div>{gestures.join(', ')}</div>
-          )}
+          
+          {/* Exercise status */}
+          <div style={{ marginTop: '10px' }}>
+            <div style={getExerciseStatus('Open Hand').style}>
+              {getExerciseStatus('Open Hand').text}
+            </div>
+            <div style={getExerciseStatus('Thumb Touch All').style}>
+              {getExerciseStatus('Thumb Touch All').text}
+              {progress['Thumb Touch All'] && (
+                <div style={{ fontSize: '0.8em', marginTop: '5px' }}>
+                  {getProgressText()}
+                </div>
+              )}
+            </div>
+            <div style={getExerciseStatus('Cylindrical Grasp').style}>
+              {getExerciseStatus('Cylindrical Grasp').text}
+            </div>
+          </div>
         </div>
 
         {/* Hidden canvas for capturing frames */}
@@ -249,6 +292,7 @@ const containerStyle = {
   flexDirection: 'column',
   alignItems: 'center',
   padding: '20px',
+  fontFamily: 'Arial, sans-serif',
 };
 
 const videoContainerStyle = {
@@ -256,14 +300,16 @@ const videoContainerStyle = {
   display: "flex",
   justifyContent: "center",
   marginBottom: "20px",
-  position: "relative"
+  position: "relative",
+  maxWidth: "640px"
 };
 
 const videoStyle = {
   width: "100%",
-  maxHeight: "400px",
+  maxHeight: "480px",
   borderRadius: "10px",
-  border: "2px solid #333"
+  border: "2px solid #333",
+  backgroundColor: "#000"
 };
 
 const overlayCanvasStyle = {
@@ -280,14 +326,16 @@ const statusOverlayStyle = {
   top: '20px',
   left: '20px',
   color: 'white',
-  padding: '10px',
+  padding: '15px',
   borderRadius: '5px',
   fontFamily: 'Arial, sans-serif',
-  zIndex: 10
+  zIndex: 10,
+  backgroundColor: 'rgba(0, 0, 0, 0.7)',
+  maxWidth: '250px'
 };
 
 const buttonStyle = {
-  padding: '8px 15px',
+  padding: '10px 20px',
   marginBottom: '15px',
   backgroundColor: '#4285f4',
   color: 'white',
@@ -295,7 +343,11 @@ const buttonStyle = {
   borderRadius: '4px',
   cursor: 'pointer',
   fontWeight: 'bold',
-  transition: 'background-color 0.3s'
+  fontSize: '16px',
+  transition: 'background-color 0.3s',
+  ':hover': {
+    backgroundColor: '#3367d6'
+  }
 };
 
 export default WebcamCapture;
