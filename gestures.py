@@ -483,7 +483,7 @@ class CylindricalGraspGesture(HandGesture):
 
 
 class ThumbTouchAllFingersGesture(HandGesture):
-    """Gesture for thumb touching all other fingers in sequence"""
+    """Gesture for thumb touching all other fingers in sequence with adjustable timing"""
     
     def __init__(self):
         self.name = "Thumb Touch All"
@@ -491,29 +491,41 @@ class ThumbTouchAllFingersGesture(HandGesture):
         self.current_finger_idx = 0  # Track which finger should be touched next
         self.last_touch_time = 0
         self.display_duration = 3.0  # seconds to display the recognition message
-        self.sequence_timeout = 5.0  # seconds allowed to complete the sequence
+        self.sequence_timeout = 8.0  # Increased total sequence timeout (was 5.0)
         self.sequence_start_time = None
         self.completed = False
         self.completion_time = 0
-        self.in_progress = False  # Flag to indicate gesture is currently being performed
+        self.in_progress = False
         self.tolerance = 0.07  # Distance tolerance for "touching" detection
-    
+        
+        # Configurable timing parameters (in seconds)
+        self.min_time_between_touches = 0.15  # Minimum time between touches (150ms)
+        self.max_time_between_touches = 1.5   # Increased maximum time between touches (was 0.5)
+        self.min_touch_duration = 0.1         # Minimum time thumb must stay on finger
+        self.cooldown_between_sequences = 1.5 # Increased cooldown (was 1.0)
+        
+        # Touch state tracking
+        self.current_touch_start_time = 0
+        self.is_currently_touching = False
+        self.last_touch_end_time = 0
+        self.last_finger_touched_time = 0  # Time when last finger was properly touched
+
     def is_thumb_touching_finger(self, hand_landmarks, finger_tip_idx):
-        """Check if thumb tip is touching another fingertip"""
+        """Check if thumb tip is touching another fingertip with visual tolerance"""
         thumb_tip = hand_landmarks.landmark[4]  # Thumb tip
         finger_tip = hand_landmarks.landmark[finger_tip_idx]
         
         # Calculate 3D distance between thumb tip and fingertip
         distance = ((thumb_tip.x - finger_tip.x)**2 + 
-                    (thumb_tip.y - finger_tip.y)**2 + 
-                    (thumb_tip.z - finger_tip.z)**2)**0.5
+                   (thumb_tip.y - finger_tip.y)**2 + 
+                   (thumb_tip.z - finger_tip.z)**2)**0.5
         
         # Check against the tolerance threshold
         return distance < self.tolerance
     
     def recognize(self, hand_landmarks, current_time=None):
         """
-        Check if the thumb has touched all fingers in sequence
+        Check if the thumb has touched all fingers in sequence with flexible timing
         
         Args:
             hand_landmarks: MediaPipe hand landmarks
@@ -530,51 +542,91 @@ class ThumbTouchAllFingersGesture(HandGesture):
             if current_time - self.completion_time < self.display_duration:
                 return True
             else:
-                # Reset after display period to allow for a new sequence
                 self.reset()
                 return False
         
         # Finger tip landmark indices
         finger_tips = [8, 12, 16, 20]  # Index, Middle, Ring, Pinky
         
-        # Start tracking sequence when first finger is touched
-        if not self.in_progress and self.is_thumb_touching_finger(hand_landmarks, finger_tips[0]):
-            self.sequence_start_time = current_time
-            self.finger_touched[0] = True
-            self.current_finger_idx = 1  # Next expect the middle finger
-            self.in_progress = True
-            return True  # Return true to indicate gesture is being recognized
+        # Check current touch state
+        currently_touching = False
+        current_touch_index = None
+        
+        # Determine which finger is being touched (if any)
+        for i, tip_idx in enumerate(finger_tips):
+            if self.is_thumb_touching_finger(hand_landmarks, tip_idx):
+                currently_touching = True
+                current_touch_index = i
+                break
+        
+        # Handle new touch detection
+        if currently_touching and not self.is_currently_touching:
+            self.current_touch_start_time = current_time
+            self.is_currently_touching = True
             
+            # If this is the first touch, start the sequence
+            if not self.in_progress and current_touch_index == 0:
+                # Only start new sequence if enough time has passed since last sequence
+                if current_time - self.last_touch_end_time > self.cooldown_between_sequences:
+                    self.sequence_start_time = current_time
+                    self.finger_touched[0] = True
+                    self.current_finger_idx = 1
+                    self.in_progress = True
+                    self.last_finger_touched_time = current_time
+                    return True
+        
+        # Handle touch release
+        if self.is_currently_touching and not currently_touching:
+            touch_duration = current_time - self.current_touch_start_time
+            self.last_touch_end_time = current_time
+            self.is_currently_touching = False
+            
+            # Validate touch duration was sufficient
+            if touch_duration < self.min_touch_duration:
+                if self.in_progress:
+                    self.reset()
+                return False
+        
         # Check for timeout if sequence has started
         if self.sequence_start_time is not None:
             if current_time - self.sequence_start_time > self.sequence_timeout:
-                self.reset()  # Reset if timeout
+                self.reset()
                 return False
         
-        # If sequence has started, check for the next finger in sequence
+        # Process in-progress sequence
         if self.in_progress and self.current_finger_idx < 4:
-            # First, check if the current expected finger is being touched
-            if self.is_thumb_touching_finger(hand_landmarks, finger_tips[self.current_finger_idx]):
-                self.finger_touched[self.current_finger_idx] = True
-                self.current_finger_idx += 1  # Move to next finger
+            # Check if current finger is being touched
+            if currently_touching and current_touch_index == self.current_finger_idx:
+                time_since_last_touch = current_time - self.last_finger_touched_time
                 
-                # If all fingers have been touched in sequence
+                # Enforce minimum time between touches
+                if time_since_last_touch < self.min_time_between_touches:
+                    return True  # Waiting for proper timing
+                
+                # Record the valid touch
+                self.finger_touched[self.current_finger_idx] = True
+                self.current_finger_idx += 1
+                self.last_finger_touched_time = current_time
+                
+                # Check for sequence completion
                 if self.current_finger_idx >= 4:
                     self.completed = True
                     self.completion_time = current_time
                     self.in_progress = False
                     return True
             
-            # Check if a finger out of sequence is being touched
-            for i in range(4):
-                if i != self.current_finger_idx and i > self.current_finger_idx:
-                    if self.is_thumb_touching_finger(hand_landmarks, finger_tips[i]):
-                        # Out of sequence touch - reset
-                        self.reset()
-                        return False
+            # Check for out-of-sequence touches
+            if currently_touching and current_touch_index > self.current_finger_idx:
+                self.reset()
+                return False
+            
+            # Check maximum time between touches
+            if current_time - self.last_finger_touched_time > self.max_time_between_touches:
+                self.reset()
+                return False
             
             # Still in progress
-            return True if self.in_progress else False
+            return True
                         
         return False
     
@@ -585,16 +637,29 @@ class ThumbTouchAllFingersGesture(HandGesture):
         self.sequence_start_time = None
         self.completed = False
         self.in_progress = False
+        self.is_currently_touching = False
+        self.last_touch_end_time = 0
+        self.current_touch_start_time = 0
+        self.last_finger_touched_time = 0
 
     def get_progress(self):
         """Return the progress of the gesture sequence"""
         touched_count = sum(1 for touched in self.finger_touched if touched)
-        return f"{touched_count}/4 fingers"
+        time_left = max(0, self.sequence_timeout - (time.time() - (self.sequence_start_time or time.time())))
+        return f"{touched_count}/4 fingers (time left: {time_left:.1f}s)"
         
     def is_in_progress(self):
         """Return whether the gesture is currently in progress"""
         return self.in_progress or self.completed
-        
+    
+    def set_timing_parameters(self, min_between=0.2, max_between=2.5, min_duration=0.1, sequence_timeout=8.0, cooldown=2.0):
+        """Adjust the timing parameters for more/less strict recognition"""
+        self.min_time_between_touches = min_between
+        self.max_time_between_touches = max_between
+        self.min_touch_duration = min_duration
+        self.sequence_timeout = sequence_timeout
+        self.cooldown_between_sequences = cooldown
+
 
 class GestureRecognizer:
     """Main class for recognizing multiple hand gestures"""
