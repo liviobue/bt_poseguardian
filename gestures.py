@@ -35,6 +35,8 @@ class OpenHandGesture(HandGesture):
     def __init__(self):
         self.name = "Open Hand"
         self.math = math
+        # Add a very small angle tolerance (in degrees)
+        self.angle_tolerance = 2.0  # Very small tolerance of just 2 degrees
     
     def recognize(self, hand_landmarks):
         """Checks if all fingers are fully extended with appropriate separation between them."""
@@ -244,12 +246,12 @@ class OpenHandGesture(HandGesture):
         ]
         
         angle = self.calculate_angle(thumb_vector, index_vector)
-        min_thumb_index_angle = 30  # Slightly more permissive
+        min_thumb_index_angle = 30 - self.angle_tolerance  # Very slightly more permissive with tolerance
         if angle < min_thumb_index_angle:
             return False
         
         # Check distances and angles between other finger pairs
-        min_finger_angle = 8  # Slightly more permissive minimum angle
+        min_finger_angle = 8 - self.angle_tolerance  # Very slightly more permissive with tolerance
         
         # Check distance and angle between index and middle
         middle_tip = fingertips[2]
