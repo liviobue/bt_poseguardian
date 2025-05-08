@@ -2,6 +2,8 @@ import mediapipe as mp
 import numpy as np
 import cv2
 import math
+import time
+import threading
 
 
 class HandGesture:
@@ -295,17 +297,18 @@ class CylindricalGraspGesture(HandGesture):
     
     def __init__(self):
         self.name = "Cylindrical Grasp"
-    
+        self.debug = True  # Set to False to disable debug prints
+        
     def recognize(self, hand_landmarks):
         """Checks if all fingers are curled in a cylindrical grasp pattern."""
         
         # Landmark indices
         FINGERTIPS = [4, 8, 12, 16, 20]   # Thumb, Index, Middle, Ring, Pinky
-        MIDDLE_JOINTS = [3, 7, 11, 15, 19] # PIP joints (middle of fingers)
-        BASE_JOINTS = [2, 6, 10, 14, 18]   # MCP joints (base of fingers)
+        MIDDLE_JOINTS = [3, 7, 11, 15, 19] # PIP joints
+        BASE_JOINTS = [2, 6, 10, 14, 18]   # MCP joints
         WRIST = 0  # Wrist landmark
         
-        # Calculate hand scale to normalize distance thresholds
+        # Calculate hand scale
         wrist_point = [
             hand_landmarks.landmark[WRIST].x,
             hand_landmarks.landmark[WRIST].y,
@@ -318,79 +321,92 @@ class CylindricalGraspGesture(HandGesture):
         ]
         hand_scale = self.calculate_3d_distance(wrist_point, middle_mcp_point)
         
-        # Determine if it's a left or right hand
+        # Determine hand orientation
         thumb_tip_x = hand_landmarks.landmark[4].x
         pinky_tip_x = hand_landmarks.landmark[20].x
         is_right_hand = thumb_tip_x < pinky_tip_x
         
-        # Check if all fingers are curled inward
+        # Debug: Show hand scale
+        if self.debug:
+            print(f"\nHand scale: {hand_scale:.3f}")
+        
+        # Check finger curl - now more lenient
         for i, (tip, middle, base) in enumerate(zip(FINGERTIPS[1:], MIDDLE_JOINTS[1:], BASE_JOINTS[1:])):
             # For index, middle, ring, and pinky fingers
-            tip_coords = [hand_landmarks.landmark[tip].x, 
-                         hand_landmarks.landmark[tip].y, 
-                         hand_landmarks.landmark[tip].z]
+            tip_y = hand_landmarks.landmark[tip].y
+            middle_y = hand_landmarks.landmark[middle].y
             
-            middle_coords = [hand_landmarks.landmark[middle].x, 
-                            hand_landmarks.landmark[middle].y, 
-                            hand_landmarks.landmark[middle].z]
-            
-            base_coords = [hand_landmarks.landmark[base].x, 
-                          hand_landmarks.landmark[base].y, 
-                          hand_landmarks.landmark[base].z]
-            
-            # Check if fingertip is below the middle joint in y-coordinate
-            # In a grasp, fingertips should be closer to palm than the PIP joints
-            if hand_landmarks.landmark[tip].y < hand_landmarks.landmark[middle].y:
+            # More lenient: fingertip should be at least slightly below middle joint
+            if tip_y < middle_y - 0.02:  # Was just tip_y < middle_y
+                if self.debug:
+                    print(f"Finger {i+1} not curled enough (tip_y: {tip_y:.3f} < middle_y: {middle_y:.3f})")
                 return False
             
-            # Check if fingers are curled toward palm
-            # Calculate distance from fingertip to wrist
-            tip_to_wrist_dist = self.calculate_3d_distance(
-                tip_coords, 
-                [hand_landmarks.landmark[WRIST].x, 
-                 hand_landmarks.landmark[WRIST].y, 
-                 hand_landmarks.landmark[WRIST].z]
+            # More lenient palm proximity check
+            tip_to_wrist = self.calculate_3d_distance(
+                [hand_landmarks.landmark[tip].x, hand_landmarks.landmark[tip].y, hand_landmarks.landmark[tip].z],
+                wrist_point
+            )
+            base_to_wrist = self.calculate_3d_distance(
+                [hand_landmarks.landmark[base].x, hand_landmarks.landmark[base].y, hand_landmarks.landmark[base].z],
+                wrist_point
             )
             
-            # Calculate distance from base to wrist
-            base_to_wrist_dist = self.calculate_3d_distance(
-                base_coords, 
-                [hand_landmarks.landmark[WRIST].x, 
-                 hand_landmarks.landmark[WRIST].y, 
-                 hand_landmarks.landmark[WRIST].z]
-            )
-            
-            # In a grasp, fingertips should be closer to palm center than finger bases
-            if tip_to_wrist_dist > base_to_wrist_dist:
+            if tip_to_wrist > base_to_wrist * 1.1:  # Was just tip_to_wrist > base_to_wrist
+                if self.debug:
+                    print(f"Finger {i+1} not close enough to palm (tip_to_wrist: {tip_to_wrist:.3f} > base_to_wrist: {base_to_wrist:.3f})")
                 return False
         
-        # Special check for thumb position
-        thumb_tip = [hand_landmarks.landmark[4].x, 
-                    hand_landmarks.landmark[4].y, 
-                    hand_landmarks.landmark[4].z]
-        
-        index_base = [hand_landmarks.landmark[5].x, 
-                     hand_landmarks.landmark[5].y, 
-                     hand_landmarks.landmark[5].z]
-        
-        # Thumb should be positioned close to index finger base in a cylindrical grasp
+        # Thumb position check - more intelligent calculation
+        thumb_tip = [
+            hand_landmarks.landmark[4].x,
+            hand_landmarks.landmark[4].y,
+            hand_landmarks.landmark[4].z
+        ]
+
+        # Use index finger MCP (base) as reference point
+        index_base = [
+            hand_landmarks.landmark[5].x,
+            hand_landmarks.landmark[5].y,
+            hand_landmarks.landmark[5].z
+        ]
+
         thumb_to_index_dist = self.calculate_3d_distance(thumb_tip, index_base)
-        
-        # Threshold based on hand scale
-        if thumb_to_index_dist > 0.2 * hand_scale:
+
+        # Dynamic threshold based on hand size and finger length
+        middle_tip = [
+            hand_landmarks.landmark[12].x,
+            hand_landmarks.landmark[12].y,
+            hand_landmarks.landmark[12].z
+        ]
+        middle_finger_length = self.calculate_3d_distance(index_base, middle_tip)
+
+        # New formula: base distance + percentage of middle finger length
+        max_thumb_dist = (0.2 * hand_scale) + (0.4 * middle_finger_length)
+
+        if thumb_to_index_dist > max_thumb_dist:
+            if self.debug:
+                print(f"Thumb distance: {thumb_to_index_dist:.3f} (allowed: {max_thumb_dist:.3f})")
+                print(f"Hand scale: {hand_scale:.3f}, Middle finger: {middle_finger_length:.3f}")
             return False
-            
-        # Check thumb opposition - thumb should be on the opposite side of fingers
+        
+        # Thumb opposition check
+        thumb_x = hand_landmarks.landmark[4].x
+        index_base_x = hand_landmarks.landmark[5].x
+        
         if is_right_hand:
-            # For right hand, thumb x should be less than index base x
-            if hand_landmarks.landmark[4].x > hand_landmarks.landmark[5].x:
+            if thumb_x > index_base_x + 0.05:  # Added small tolerance
+                if self.debug:
+                    print(f"Right hand thumb not opposed (thumb_x: {thumb_x:.3f} > index_base_x: {index_base_x:.3f})")
                 return False
         else:
-            # For left hand, thumb x should be greater than index base x
-            if hand_landmarks.landmark[4].x < hand_landmarks.landmark[5].x:
+            if thumb_x < index_base_x - 0.05:  # Added small tolerance
+                if self.debug:
+                    print(f"Left hand thumb not opposed (thumb_x: {thumb_x:.3f} < index_base_x: {index_base_x:.3f})")
                 return False
         
-        # All checks passed, it's a cylindrical grasp
+        if self.debug:
+            print("Cylindrical grasp detected!")
         return True
     
     def calculate_3d_distance(self, point1, point2):
@@ -441,7 +457,6 @@ class ThumbTouchAllFingersGesture(HandGesture):
             bool: True if gesture is recognized or in progress, False otherwise
         """
         if current_time is None:
-            import time
             current_time = time.time()
             
         # If gesture was already completed and we're in display period
@@ -560,7 +575,7 @@ class GestureRecognizer:
         Returns:
             tuple: (recognized: bool, gesture_name: str, progress: str, is_running: bool)
         """
-        import time
+
         if current_time is None:
             current_time = time.time()
         
@@ -603,16 +618,14 @@ class GestureRecognizer:
         # This is intentionally kept separate from the loop below to give it highest priority
         cylindrical_gesture = self.get_gesture_by_name("Cylindrical Grasp")
         if cylindrical_gesture:
+            cylindrical_gesture.debug = True  # Enable debug prints
             recognized = cylindrical_gesture.recognize(hand_landmarks)
             if recognized:
-                # If cylindrical grasp is recognized, set a flag that user is holding an object
                 self.holding_object = True
-                
-                # This prevents ThumbTouchAllFingersGesture from being recognized when user is holding an object
                 return True, cylindrical_gesture.get_name(), "", False
-        else:
-            # Reset holding object flag if cylindrical grasp is not detected
-            self.holding_object = False
+
+        # Reset holding_object if cylindrical grasp isn't detected
+        self.holding_object = False
             
         # Sort gestures by priority if they have that attribute
         sorted_gestures = sorted(
@@ -749,8 +762,6 @@ class GestureRecognizer:
     
     def process_video(self, cap):
         """Generator function to process video frames"""
-        import time
-        
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -769,6 +780,27 @@ class GestureRecognizer:
             completed_gestures = []
             progress_info = {}
 
+            # Initialize recognition status
+            cylindrical_status = "Cylindrical: Not Recognized"
+            status_color = (0, 0, 255)  # Red for not recognized
+            
+            if result.multi_hand_landmarks:
+                for hand_landmarks in result.multi_hand_landmarks:
+                    # Check for cylindrical grasp
+                    cylindrical_gesture = self.get_gesture_by_name("Cylindrical Grasp")
+                    if cylindrical_gesture and cylindrical_gesture.recognize(hand_landmarks):
+                        cylindrical_status = "Cylindrical: Recognized"
+                        status_color = (0, 255, 0)  # Green for recognized
+                        
+                        # Optional: Draw a cylinder icon
+                        palm_x = int(hand_landmarks.landmark[9].x * width)
+                        palm_y = int(hand_landmarks.landmark[9].y * height)
+                        cv2.ellipse(frame, (palm_x, palm_y), (30, 15), 0, 0, 360, (0, 255, 0), 2)
+                    
+                    # Draw the status text (top-left corner)
+                    cv2.putText(frame, cylindrical_status, (700, 30), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
+
             # Check if we need to keep displaying previously completed gestures
             for gesture_name, display_until in list(self.gesture_display_times.items()):
                 if current_time < display_until:
@@ -783,6 +815,21 @@ class GestureRecognizer:
                 for hand_landmarks in result.multi_hand_landmarks:
                     self.draw_landmarks(frame, hand_landmarks)
                     
+                    # Draw thumb-to-index distance line and measurement
+                    thumb_x = int(hand_landmarks.landmark[4].x * width)
+                    thumb_y = int(hand_landmarks.landmark[4].y * height)
+                    index_base_x = int(hand_landmarks.landmark[5].x * width)
+                    index_base_y = int(hand_landmarks.landmark[5].y * height)
+                    
+                    # Draw the distance line
+                    cv2.line(frame, (thumb_x, thumb_y), (index_base_x, index_base_y), (0, 255, 255), 2)
+                    
+                    # Display the distance (normalized to 0-1 range)
+                    distance = ((thumb_x-index_base_x)**2 + (thumb_y-index_base_y)**2)**0.5 / width
+                    cv2.putText(frame, f"{distance:.2f}", 
+                            ((thumb_x+index_base_x)//2, (thumb_y+index_base_y)//2), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,255), 1)
+
                     # Recognize the gesture
                     recognized, gesture_name, progress, is_running = self.recognize_gesture(hand_landmarks, current_time)
                     if recognized:
@@ -804,8 +851,6 @@ class GestureRecognizer:
                                     
                                     # Reset the gesture after completion to allow for repeated recognition
                                     def reset_later():
-                                        import threading
-                                        import time
                                         time.sleep(3.0)  # Wait for display duration
                                         thumb_gesture.reset()
                                     
@@ -827,6 +872,25 @@ class GestureRecognizer:
                 gesture_text = ", ".join(regular_gestures)
                 cv2.putText(frame, gesture_text, (50, 100), 
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2, cv2.LINE_AA)
+            
+            # Add this with other visual feedback code
+            if "Cylindrical Grasp" in regular_gestures:
+                # Draw a green cylinder in the hand area
+                if result.multi_hand_landmarks:
+                    for hand_landmarks in result.multi_hand_landmarks:
+                        # Get palm center (approximate)
+                        palm_x = int(hand_landmarks.landmark[9].x * width)
+                        palm_y = int(hand_landmarks.landmark[9].y * height)
+                        
+                        # Draw a cylinder representation
+                        cv2.ellipse(frame, (palm_x, palm_y-30), (30, 15), 0, 0, 360, (0, 255, 0), 2)
+                        cv2.line(frame, (palm_x-30, palm_y-30), (palm_x-30, palm_y+30), (0, 255, 0), 2)
+                        cv2.line(frame, (palm_x+30, palm_y-30), (palm_x+30, palm_y+30), (0, 255, 0), 2)
+                        cv2.ellipse(frame, (palm_x, palm_y+30), (30, 15), 0, 0, 360, (0, 255, 0), 2)
+                        
+                        # Add text
+                        cv2.putText(frame, "Holding", (palm_x-40, palm_y-50), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
             # Display in-progress gestures with progress info
             if in_progress_gestures:
