@@ -34,8 +34,6 @@ class OpenHandGesture(HandGesture):
     
     def __init__(self):
         self.name = "Open Hand"
-        
-        # Import math module if needed for angular calculations
         self.math = math
     
     def recognize(self, hand_landmarks):
@@ -47,16 +45,12 @@ class OpenHandGesture(HandGesture):
         BASE_JOINTS = [2, 6, 10, 14, 18]   # MCP joints (base of fingers)
         WRIST = 0  # Wrist landmark
 
-        tolerance = 0.05  # Tolerance for natural variations
-        
         # Determine if it's a left or right hand
         thumb_tip_x = hand_landmarks.landmark[4].x
         pinky_tip_x = hand_landmarks.landmark[20].x
-        
         is_right_hand = thumb_tip_x < pinky_tip_x
         
-        # Calculate hand scale to normalize distance thresholds
-        # Use distance from wrist to middle finger MCP as reference
+        # Calculate hand scale using distance from wrist to middle finger MCP
         wrist_point = [
             hand_landmarks.landmark[WRIST].x,
             hand_landmarks.landmark[WRIST].y,
@@ -69,30 +63,88 @@ class OpenHandGesture(HandGesture):
         ]
         hand_scale = self.calculate_3d_distance(wrist_point, middle_mcp_point)
         
-        # Adjust thresholds based on hand scale
-        min_segment_distance = 0.035 * hand_scale  # More permissive minimum distance
-        min_extended_ratio = 0.9     # Lower ratio for straight finger (more permissive)
-        max_z_diff_ratio = 0.95       # More permissive z-difference threshold
+        # Calculate segment lengths for all fingers (excluding thumb)
+        finger_segment_lengths = []
+        for i in range(1, 5):  # Skip thumb, index=1, middle=2, ring=3, pinky=4
+            tip = FINGERTIPS[i]
+            middle = MIDDLE_JOINTS[i]
+            base = BASE_JOINTS[i]
+            
+            # Get coordinates
+            tip_coords = [
+                hand_landmarks.landmark[tip].x,
+                hand_landmarks.landmark[tip].y,
+                hand_landmarks.landmark[tip].z
+            ]
+            middle_coords = [
+                hand_landmarks.landmark[middle].x,
+                hand_landmarks.landmark[middle].y,
+                hand_landmarks.landmark[middle].z
+            ]
+            base_coords = [
+                hand_landmarks.landmark[base].x,
+                hand_landmarks.landmark[base].y,
+                hand_landmarks.landmark[base].z
+            ]
+            
+            # Calculate segment lengths
+            tip_to_middle = self.calculate_3d_distance(tip_coords, middle_coords)
+            middle_to_base = self.calculate_3d_distance(middle_coords, base_coords)
+            
+            finger_segment_lengths.append((tip_to_middle, middle_to_base))
+        
+        # Calculate average segment lengths across all fingers
+        avg_tip_to_middle = sum([lengths[0] for lengths in finger_segment_lengths]) / len(finger_segment_lengths)
+        avg_middle_to_base = sum([lengths[1] for lengths in finger_segment_lengths]) / len(finger_segment_lengths)
+        
+        # Calculate average finger length (excluding thumb) for reference
+        finger_lengths = []
+        for i in range(1, 5):  # Skip thumb (index 0)
+            tip = FINGERTIPS[i]
+            base = BASE_JOINTS[i]
+            tip_coords = [
+                hand_landmarks.landmark[tip].x,
+                hand_landmarks.landmark[tip].y,
+                hand_landmarks.landmark[tip].z
+            ]
+            base_coords = [
+                hand_landmarks.landmark[base].x,
+                hand_landmarks.landmark[base].y,
+                hand_landmarks.landmark[base].z
+            ]
+            finger_lengths.append(self.calculate_3d_distance(tip_coords, base_coords))
+        avg_finger_length = sum(finger_lengths) / len(finger_lengths) if finger_lengths else hand_scale
+        
+        # Dynamic thresholds based on hand size
+        min_segment_distance = 0.15 * avg_finger_length  # Minimum distance between finger segments
+        min_straightness_ratio = 0.85  # Minimum ratio of direct distance to sum of segment distances
+        
+        # NEW: Maximum allowed deviation in segment length compared to average (as percentage)
+        max_segment_length_deviation = 0.25  # 25% deviation allowed
         
         # Check each finger is extended
         for i, (tip, middle, base) in enumerate(zip(FINGERTIPS, MIDDLE_JOINTS, BASE_JOINTS)):
             # Get 3D coordinates for each joint
-            tip_coords = [hand_landmarks.landmark[tip].x, 
-                         hand_landmarks.landmark[tip].y, 
-                         hand_landmarks.landmark[tip].z]
+            tip_coords = [
+                hand_landmarks.landmark[tip].x, 
+                hand_landmarks.landmark[tip].y, 
+                hand_landmarks.landmark[tip].z
+            ]
+            middle_coords = [
+                hand_landmarks.landmark[middle].x, 
+                hand_landmarks.landmark[middle].y, 
+                hand_landmarks.landmark[middle].z
+            ]
+            base_coords = [
+                hand_landmarks.landmark[base].x, 
+                hand_landmarks.landmark[base].y, 
+                hand_landmarks.landmark[base].z
+            ]
             
-            middle_coords = [hand_landmarks.landmark[middle].x, 
-                            hand_landmarks.landmark[middle].y, 
-                            hand_landmarks.landmark[middle].z]
-            
-            base_coords = [hand_landmarks.landmark[base].x, 
-                          hand_landmarks.landmark[base].y, 
-                          hand_landmarks.landmark[base].z]
-            
-            # Calculate 3D distances between joints
-            tip_to_middle_dist = self.calculate_3d_distance(tip_coords, middle_coords)
-            middle_to_base_dist = self.calculate_3d_distance(middle_coords, base_coords)
-            tip_to_base_dist = self.calculate_3d_distance(tip_coords, base_coords)
+            # Calculate distances between joints
+            tip_to_middle = self.calculate_3d_distance(tip_coords, middle_coords)
+            middle_to_base = self.calculate_3d_distance(middle_coords, base_coords)
+            tip_to_base = self.calculate_3d_distance(tip_coords, base_coords)
             
             # Special handling for thumb
             if i == 0:  # Thumb
@@ -104,10 +156,9 @@ class OpenHandGesture(HandGesture):
                     if not (hand_landmarks.landmark[tip].x > hand_landmarks.landmark[middle].x > hand_landmarks.landmark[base].x):
                         return False
                 
-                # Check distances for thumb extension - less strict for thumb
-                if tip_to_middle_dist < 0.8 * min_segment_distance or middle_to_base_dist < 0.8 * min_segment_distance:
+                # Check distances for thumb extension
+                if tip_to_middle < 0.7 * min_segment_distance or middle_to_base < 0.7 * min_segment_distance:
                     return False
-                
             else:
                 # For other fingers
                 # 1. Check if finger is extended upward (y coordinate decreasing)
@@ -115,28 +166,41 @@ class OpenHandGesture(HandGesture):
                     return False
                 
                 # 2. Check distances to ensure finger is straight and extended
-                if tip_to_middle_dist < min_segment_distance or middle_to_base_dist < min_segment_distance:
+                if tip_to_middle < min_segment_distance or middle_to_base < min_segment_distance:
                     return False
                 
                 # 3. Check the ratio of direct distance to segment distances
-                # This is still useful for detecting curling toward the camera, but with more permissive threshold
-                extended_ratio = tip_to_base_dist / (tip_to_middle_dist + middle_to_base_dist)
-                if extended_ratio < min_extended_ratio:
+                # This detects when finger is bent toward camera (segments get shorter)
+                straightness_ratio = tip_to_base / (tip_to_middle + middle_to_base)
+                if straightness_ratio < min_straightness_ratio:
                     return False
                 
-                # 4. Z-depth check - but more permissive
-                z_tip = hand_landmarks.landmark[tip].z
-                z_middle = hand_landmarks.landmark[middle].z
-                z_base = hand_landmarks.landmark[base].z
+                # 4. Check if segments are too short compared to average finger length
+                if (tip_to_middle + middle_to_base) < 0.6 * avg_finger_length:
+                    return False
                 
-                # Calculate the range of z values
-                z_range = max(abs(z_tip - z_middle), abs(z_middle - z_base), abs(z_tip - z_base))
+                # 5. Check if the finger is bending toward camera by comparing z-coordinates
+                # When finger bends toward camera, the tip z-coordinate decreases significantly
+                z_diff = abs(tip_coords[2] - base_coords[2])
+                if z_diff > 0.2 * avg_finger_length:  # Large z-difference indicates bending
+                    return False
                 
-                # Calculate the total finger length in 3D
-                finger_segment_length = tip_to_middle_dist + middle_to_base_dist
+                # NEW: Check if segment lengths deviate too much from average across all fingers
+                # Skip thumb (i=0) since it has different proportions
+                finger_idx = i - 1  # Adjust index for finger_segment_lengths array
                 
-                # More permissive check for z variation
-                if z_range > max_z_diff_ratio * finger_segment_length:
+                # Compare this finger's segments to the average of all fingers
+                tip_middle_deviation = abs(tip_to_middle - avg_tip_to_middle) / avg_tip_to_middle
+                middle_base_deviation = abs(middle_to_base - avg_middle_to_base) / avg_middle_to_base
+                
+                if tip_middle_deviation > max_segment_length_deviation or middle_base_deviation > max_segment_length_deviation:
+                    # This finger's segments are too different from others - likely bent toward camera
+                    return False
+                
+                # NEW: Check for absolute shortening compared to expected length
+                expected_segment_ratio = 0.48  # Approx ratio of segment to full length in extended finger
+                if tip_to_middle < expected_segment_ratio * avg_finger_length * 0.8:  # 20% tolerance
+                    # Segment is too short - likely bent toward camera
                     return False
         
         # Now check finger spacing as in the original code
