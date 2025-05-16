@@ -47,10 +47,10 @@ collection = db["data"]
 # Google API Connection
 genai.configure(api_key=Config.GOOGLE_API_KEY)
 
-#VIDEO_PROMPT = "Analyze this rehabilitation exercise video. Focus on identifying hand movements and assessing whether the movements are physiologically correct or if there are any unnatural or compensatory patterns. Provide the following in bullet points: - The type of rehabilitation exercise being performed - A description of the hand movement patterns - An evaluation of movement quality (physiologically correct vs. unnatural) - Any signs of abnormal movement, compensation, or deviation from ideal execution - Suggestions for therapeutic adjustments or improvements. Use plain text only, no Markdown formatting like bold or italics."
-VIDEO_PROMPT = "Evaluate this rehabilitation video. Focus on hand movement, identify the exercise type, assess if movement is physiologically correct, and note any unnatural patterns. Use bullet points and plain text only."
-#KEYPOINTS_PROMPT = "Analyze the following hand keypoint data representing a rehabilitation exercise. Provide a bullet-point summary including: - The recognized type of exercise - An interpretation of movement patterns based on keypoints - An assessment of whether movements are physiologically correct - Any detected unnatural, compensatory, or asymmetrical movement patterns - Recommendations for correction or further evaluation. Keep the response in plain text, without Markdown formatting."
-KEYPOINTS_PROMPT = "Analyze these hand keypoints. Identify the exercise, check if movements are physiologically correct, and list any unnatural patterns. Bullet points only, plain text."
+VIDEO_PROMPT = "Analyze the provided rehabilitation exercise video based solely on the visual content. Identify and describe the hand movements, and assess whether they appear physiologically correct or show signs of compensatory or unnatural motion. Provide a concise bullet-point summary that includes: - The type of rehabilitation exercise being performed - A description of the observed hand movement patterns - An evaluation of movement quality based on visible execution - Any visible signs of abnormal movement, compensation, or deviations from ideal execution - Actionable suggestions for therapeutic adjustments or improvements, based only on the visible information in the video. Avoid requesting additional footage or data. Use plain text only, without Markdown formatting."
+#VIDEO_PROMPT = "Evaluate this rehabilitation video. Focus on hand movement, identify the exercise type, assess if movement is physiologically correct, and note any unnatural patterns. Use bullet points and plain text only."
+KEYPOINTS_PROMPT = "Analyze the following hand keypoint data from a rehabilitation exercise. Use only the provided keypoint information to identify movement types, evaluate biomechanical plausibility, and detect any unusual patterns. Summarize your analysis in bullet points, covering: - The recognized type of rehabilitation exercise - Interpretation of movement patterns based on keypoint data - Assessment of physiological correctness of the movements - Any compensatory, unnatural, or asymmetrical movement patterns observable from the keypoints - Specific recommendations for correction or further evaluation, using only the available keypoint data. Do not request additional data. Keep the response in plain text with no Markdown formatting."
+#KEYPOINTS_PROMPT = "Analyze these hand keypoints. Identify the exercise, check if movements are physiologically correct, and list any unnatural patterns. Bullet points only, plain text."
 MAX_FILE_SIZE = 20 * 1024 * 1024
 SUPPORTED_MIME_TYPES = [
     'video/mp4',
@@ -211,15 +211,15 @@ def prepare_keypoints_for_gemini(video_data):
         ]
         
         # Add detected gestures to frame text
-        if "gestures" in frame and frame["gestures"]:
-            frame_text.append(f"  Detected gestures: {', '.join(frame['gestures'])}")
+        #if "gestures" in frame and frame["gestures"]:
+            #frame_text.append(f"  Detected gestures: {', '.join(frame['gestures'])}")
             
             # Count gesture occurrences for summary
-            for gesture in frame["gestures"]:
-                if gesture in gesture_counts:
-                    gesture_counts[gesture] += 1
-                else:
-                    gesture_counts[gesture] = 1
+            #for gesture in frame["gestures"]:
+            #    if gesture in gesture_counts:
+            #        gesture_counts[gesture] += 1
+            #    else:
+            #        gesture_counts[gesture] = 1
         
         if not frame["hands"]:
             frame_text.append("  No hands detected")

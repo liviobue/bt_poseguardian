@@ -1,5 +1,4 @@
 import mediapipe as mp
-import numpy as np
 import cv2
 import math
 import time
@@ -986,7 +985,6 @@ class GestureRecognizer:
                                         thumb_gesture.reset()
                                     
                                     # Start a thread to reset the gesture after display time
-                                    import threading
                                     threading.Thread(target=reset_later).start()
                         
                         if progress:
