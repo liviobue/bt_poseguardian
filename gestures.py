@@ -121,7 +121,7 @@ class OpenHandGesture(HandGesture):
         min_straightness_ratio = 0.85  # Minimum ratio of direct distance to sum of segment distances
         
         # NEW: Maximum allowed deviation in segment length compared to average (as percentage)
-        max_segment_length_deviation = 0.25  # 25% deviation allowed
+        max_segment_length_deviation = 0.40  # 25% deviation allowed
         
         # Check each finger is extended
         for i, (tip, middle, base) in enumerate(zip(FINGERTIPS, MIDDLE_JOINTS, BASE_JOINTS)):
@@ -186,7 +186,7 @@ class OpenHandGesture(HandGesture):
                 if z_diff > 0.2 * avg_finger_length:  # Large z-difference indicates bending
                     return False
                 
-                # NEW: Check if segment lengths deviate too much from average across all fingers
+                # Check if segment lengths deviate too much from average across all fingers
                 # Skip thumb (i=0) since it has different proportions
                 finger_idx = i - 1  # Adjust index for finger_segment_lengths array
                 
@@ -198,16 +198,16 @@ class OpenHandGesture(HandGesture):
                     # This finger's segments are too different from others - likely bent toward camera
                     return False
                 
-                # NEW: Check for absolute shortening compared to expected length
+                # Check for absolute shortening compared to expected length
                 expected_segment_ratio = 0.48  # Approx ratio of segment to full length in extended finger
                 if tip_to_middle < expected_segment_ratio * avg_finger_length * 0.8:  # 20% tolerance
                     # Segment is too short - likely bent toward camera
                     return False
         
-        # Now check finger spacing as in the original code
+        # Now check minimum finger spacing
         # Check the separation between each pair of fingertips
         min_thumb_index_distance = 0.12 * hand_scale
-        min_index_middle_distance = 0.09 * hand_scale  # Slightly more permissive
+        min_index_middle_distance = 0.09 * hand_scale
         min_middle_ring_distance = 0.09 * hand_scale
         min_ring_pinky_distance = 0.10 * hand_scale
         
@@ -245,12 +245,12 @@ class OpenHandGesture(HandGesture):
         ]
         
         angle = self.calculate_angle(thumb_vector, index_vector)
-        min_thumb_index_angle = 30 - self.angle_tolerance  # Very slightly more permissive with tolerance
+        min_thumb_index_angle = 30 - self.angle_tolerance
         if angle < min_thumb_index_angle:
             return False
         
         # Check distances and angles between other finger pairs
-        min_finger_angle = 8 - self.angle_tolerance  # Very slightly more permissive with tolerance
+        min_finger_angle = 8 - self.angle_tolerance
         
         # Check distance and angle between index and middle
         middle_tip = fingertips[2]
@@ -446,14 +446,14 @@ class CylindricalGraspGesture(HandGesture):
         ]
         middle_finger_length = self.calculate_3d_distance(index_base, middle_tip)
 
-        # New formula: base distance + percentage of middle finger length
+        """ # New formula: base distance + percentage of middle finger length
         max_thumb_dist = (0.2 * hand_scale) + (0.4 * middle_finger_length)
 
         if thumb_to_index_dist > max_thumb_dist:
             if self.debug:
                 print(f"Thumb distance: {thumb_to_index_dist:.3f} (allowed: {max_thumb_dist:.3f})")
                 print(f"Hand scale: {hand_scale:.3f}, Middle finger: {middle_finger_length:.3f}")
-            return False
+            return False """
         
         # Thumb opposition check
         thumb_x = hand_landmarks.landmark[4].x
