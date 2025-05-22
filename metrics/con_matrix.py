@@ -9,7 +9,7 @@ import os
 
 # Define confusion matrices for each exercise
 conf_matrices = {
-    'Cylindrical Grasp': {'TP': 1, 'TN': 1, 'FP': 1, 'FN': 1},
+    'Cylindrical Grasp': {'TP': 37, 'TN': 33, 'FP': 7, 'FN': 3},
     'OpenHand Pose': {'TP': 36, 'TN': 33, 'FP': 7, 'FN': 4},
     'Sequential Thumb-to-Finger Opposition Task': {'TP': 28, 'TN': 40, 'FP': 0, 'FN': 12},
 }

@@ -49,6 +49,8 @@ GOOGLE_API_KEY=your_google_api_key_here
 MONGO_URI=your_mongo_uri_here
 ```
 
+And please edit the env variables in the docker-compose.yaml file.
+
 ### 🛠 Build Docker Images Locally
 
 To build the Docker images for both the backend and frontend locally, run:
