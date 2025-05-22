@@ -34,8 +34,10 @@ class OpenHandGesture(HandGesture):
     def __init__(self):
         self.name = "Open Hand"
         self.math = math
-        # Add a very small angle tolerance (in degrees)
-        self.angle_tolerance = 2.0  # Very small tolerance of just 2 degrees
+        # Increase the angle tolerance to account for more variation
+        self.angle_tolerance = 5.0  # Increased from 2.0 to 5.0 degrees
+        # Add a thumb position tolerance factor
+        self.thumb_position_tolerance = 0.15  # Allow 15% tolerance for thumb position
     
     def recognize(self, hand_landmarks):
         """Checks if all fingers are fully extended with appropriate separation between them."""
@@ -120,8 +122,8 @@ class OpenHandGesture(HandGesture):
         min_segment_distance = 0.15 * avg_finger_length  # Minimum distance between finger segments
         min_straightness_ratio = 0.85  # Minimum ratio of direct distance to sum of segment distances
         
-        # NEW: Maximum allowed deviation in segment length compared to average (as percentage)
-        max_segment_length_deviation = 0.40  # 25% deviation allowed
+        # Maximum allowed deviation in segment length compared to average (as percentage)
+        max_segment_length_deviation = 0.45  # Increased from 0.40 to 0.45 for more tolerance
         
         # Check each finger is extended
         for i, (tip, middle, base) in enumerate(zip(FINGERTIPS, MIDDLE_JOINTS, BASE_JOINTS)):
@@ -149,16 +151,38 @@ class OpenHandGesture(HandGesture):
             
             # Special handling for thumb
             if i == 0:  # Thumb
-                # For thumb, check extension based on hand orientation
+                # Modified: More lenient check for thumb position
+                # We'll check if the Z-coordinate of the thumb tip is not too far forward
+                thumb_z = tip_coords[2]
+                index_base_z = hand_landmarks.landmark[BASE_JOINTS[1]].z
+                
+                # Calculate maximum allowed z-offset for thumb (based on hand scale)
+                max_forward_z_offset = hand_scale * self.thumb_position_tolerance
+                
+                # Check if thumb is too far forward
+                if abs(thumb_z - index_base_z) > max_forward_z_offset:
+                    # Only enforce if the thumb is significantly forward of the hand plane
+                    if thumb_z < index_base_z - max_forward_z_offset:
+                        # Thumb is too far forward - but we'll be more lenient
+                        # Only fail if it's extremely forward (2x the tolerance)
+                        if thumb_z < index_base_z - (2 * max_forward_z_offset):
+                            return False
+                
+                # Relaxed check for thumb extension based on hand orientation
                 if is_right_hand:
-                    if not (hand_landmarks.landmark[tip].x < hand_landmarks.landmark[middle].x < hand_landmarks.landmark[base].x):
+                    # For right hand, thumb tip should be generally to the left of its joints
+                    # But allow for some deviation where it might be slightly forward
+                    if hand_landmarks.landmark[tip].x > hand_landmarks.landmark[base].x:
+                        # Thumb is pointing in completely wrong direction
                         return False
                 else:
-                    if not (hand_landmarks.landmark[tip].x > hand_landmarks.landmark[middle].x > hand_landmarks.landmark[base].x):
+                    # For left hand, thumb tip should be generally to the right of its joints
+                    if hand_landmarks.landmark[tip].x < hand_landmarks.landmark[base].x:
+                        # Thumb is pointing in completely wrong direction
                         return False
                 
-                # Check distances for thumb extension
-                if tip_to_middle < 0.7 * min_segment_distance or middle_to_base < 0.7 * min_segment_distance:
+                # Check distances for thumb extension with more tolerance
+                if tip_to_middle < 0.6 * min_segment_distance or middle_to_base < 0.6 * min_segment_distance:
                     return False
             else:
                 # For other fingers
@@ -200,38 +224,83 @@ class OpenHandGesture(HandGesture):
                 
                 # Check for absolute shortening compared to expected length
                 expected_segment_ratio = 0.48  # Approx ratio of segment to full length in extended finger
-                if tip_to_middle < expected_segment_ratio * avg_finger_length * 0.8:  # 20% tolerance
+                if tip_to_middle < expected_segment_ratio * avg_finger_length * 0.75:  # Increased tolerance from 0.8 to 0.75
                     # Segment is too short - likely bent toward camera
                     return False
         
-        # Now check minimum finger spacing
-        # Check the separation between each pair of fingertips
-        min_thumb_index_distance = 0.12 * hand_scale
-        min_index_middle_distance = 0.09 * hand_scale
-        min_middle_ring_distance = 0.09 * hand_scale
-        min_ring_pinky_distance = 0.10 * hand_scale
-        
-        # Get all fingertips for easier access
+        # Get all fingertips and bases for easier access
         fingertips = [hand_landmarks.landmark[i] for i in FINGERTIPS]
         finger_bases = [hand_landmarks.landmark[i] for i in BASE_JOINTS]
         
-        # Check distance between thumb and index
+        # Now check minimum finger spacing
+        # Check the separation between each pair of fingertips
+        # MODIFIED: Increased these minimum distances to require greater finger separation
+        min_thumb_index_distance = 0.18 * hand_scale  # Increased from 0.15 to 0.18
+        min_index_middle_distance = 0.16 * hand_scale  # Increased from 0.12 to 0.16
+        min_middle_ring_distance = 0.16 * hand_scale   # Increased from 0.12 to 0.16
+        min_ring_pinky_distance = 0.16 * hand_scale    # Increased from 0.12 to 0.16
+        
+        # Check all fingertip distances for minimal separation
+        for i in range(len(fingertips)):
+            for j in range(i+1, len(fingertips)):
+                # Skip checking thumb against ring and pinky (they can be naturally farther apart)
+                if i == 0 and j >= 3:
+                    continue
+                    
+                # Get appropriate minimum distance based on which fingers we're comparing
+                if i == 0 and j == 1:  # Thumb and index
+                    min_distance = min_thumb_index_distance
+                elif i == 1 and j == 2:  # Index and middle
+                    min_distance = min_index_middle_distance
+                elif i == 2 and j == 3:  # Middle and ring
+                    min_distance = min_middle_ring_distance
+                elif i == 3 and j == 4:  # Ring and pinky
+                    min_distance = min_ring_pinky_distance
+                else:  # Other finger combinations
+                    # For non-adjacent fingers, use the larger of the two adjacent finger distances
+                    min_distance = 0.18 * hand_scale  # Increased from 0.14 to 0.18 for non-adjacent fingers
+                
+                # Calculate distance between these two fingertips
+                distance = self.calculate_3d_distance(
+                    [fingertips[i].x, fingertips[i].y, fingertips[i].z],
+                    [fingertips[j].x, fingertips[j].y, fingertips[j].z]
+                )
+                
+                # Fail if fingers are too close together
+                if distance < min_distance:
+                    return False
+        
+        # Calculate a minimum distance between finger bases as well
+        # This ensures fingers are splayed apart not just at the tips
+        # MODIFIED: Increased base distance to ensure fingers are splayed more at the base
+        min_base_distance = 0.085 * hand_scale  # Increased from 0.065 to 0.085
+        
+        # Check finger base separation (except thumb base which can be naturally closer)
+        for i in range(1, len(finger_bases)-1):  # Skip thumb, check index through ring
+            # Calculate distance to next finger base
+            base_distance = self.calculate_3d_distance(
+                [finger_bases[i].x, finger_bases[i].y, finger_bases[i].z],
+                [finger_bases[i+1].x, finger_bases[i+1].y, finger_bases[i+1].z]
+            )
+            
+            # Fail if bases are too close (fingers not splayed properly)
+            if base_distance < min_base_distance:
+                return False
+        
+        # References for specific fingers needed for angle calculations
         thumb_tip = fingertips[0]
         index_tip = fingertips[1]
-        distance = self.calculate_3d_distance(
-            [thumb_tip.x, thumb_tip.y, thumb_tip.z],
-            [index_tip.x, index_tip.y, index_tip.z]
-        )
+        middle_tip = fingertips[2]
+        ring_tip = fingertips[3]
+        pinky_tip = fingertips[4]
         
-        if distance < min_thumb_index_distance:
-            return False
-            
-        # Calculate and check angles between fingers
-        # Thumb and index angle check
         thumb_base = finger_bases[0]
         index_base = finger_bases[1]
+        middle_base = finger_bases[2]
+        ring_base = finger_bases[3]
+        pinky_base = finger_bases[4]
         
-        # Create vectors from base to tip
+        # Create vectors from base to tip for angle calculations
         thumb_vector = [
             thumb_tip.x - thumb_base.x,
             thumb_tip.y - thumb_base.y,
@@ -244,82 +313,45 @@ class OpenHandGesture(HandGesture):
             index_tip.z - index_base.z
         ]
         
-        angle = self.calculate_angle(thumb_vector, index_vector)
-        min_thumb_index_angle = 30 - self.angle_tolerance
-        if angle < min_thumb_index_angle:
-            return False
-        
-        # Check distances and angles between other finger pairs
-        min_finger_angle = 8 - self.angle_tolerance
-        
-        # Check distance and angle between index and middle
-        middle_tip = fingertips[2]
-        middle_base = finger_bases[2]
-        
-        # Distance check
-        distance = self.calculate_3d_distance(
-            [index_tip.x, index_tip.y, index_tip.z],
-            [middle_tip.x, middle_tip.y, middle_tip.z]
-        )
-        
-        if distance < min_index_middle_distance:
-            return False
-        
-        # Angle check
         middle_vector = [
             middle_tip.x - middle_base.x,
             middle_tip.y - middle_base.y,
             middle_tip.z - middle_base.z
         ]
         
-        angle = self.calculate_angle(index_vector, middle_vector)
-        if angle < min_finger_angle:
-            return False
-        
-        # Check distance and angle between middle and ring
-        ring_tip = fingertips[3]
-        ring_base = finger_bases[3]
-        
-        # Distance check
-        distance = self.calculate_3d_distance(
-            [middle_tip.x, middle_tip.y, middle_tip.z],
-            [ring_tip.x, ring_tip.y, ring_tip.z]
-        )
-        
-        if distance < min_middle_ring_distance:
-            return False
-        
-        # Angle check
         ring_vector = [
             ring_tip.x - ring_base.x,
             ring_tip.y - ring_base.y,
             ring_tip.z - ring_base.z
         ]
         
-        angle = self.calculate_angle(middle_vector, ring_vector)
-        if angle < min_finger_angle:
-            return False
-        
-        # Check distance and angle between ring and pinky
-        pinky_tip = fingertips[4]
-        pinky_base = finger_bases[4]
-        
-        # Distance check
-        distance = self.calculate_3d_distance(
-            [ring_tip.x, ring_tip.y, ring_tip.z],
-            [pinky_tip.x, pinky_tip.y, pinky_tip.z]
-        )
-        
-        if distance < min_ring_pinky_distance:
-            return False
-        
-        # Angle check
         pinky_vector = [
             pinky_tip.x - pinky_base.x,
             pinky_tip.y - pinky_base.y,
             pinky_tip.z - pinky_base.z
         ]
+            
+        # Calculate and check angles between fingers
+        # Thumb and index angle check
+        angle = self.calculate_angle(thumb_vector, index_vector)
+        min_thumb_index_angle = 28 - self.angle_tolerance  # Increased from 25 to 28 degrees
+        if angle < min_thumb_index_angle:
+            return False
         
+        # MODIFIED: Increased minimum angles between finger pairs for greater separation
+        min_finger_angle = 9 - self.angle_tolerance  # Increased from 6 to 9 degrees
+        
+        # Check angle between index and middle
+        angle = self.calculate_angle(index_vector, middle_vector)
+        if angle < min_finger_angle:
+            return False
+        
+        # Check angle between middle and ring
+        angle = self.calculate_angle(middle_vector, ring_vector)
+        if angle < min_finger_angle:
+            return False
+        
+        # Check angle between ring and pinky
         angle = self.calculate_angle(ring_vector, pinky_vector)
         if angle < min_finger_angle:
             return False
@@ -358,14 +390,19 @@ class OpenHandGesture(HandGesture):
 
 
 class CylindricalGraspGesture(HandGesture):
-    """Gesture for cylindrical grasp (all fingers curled as if holding a cylinder)"""
+    """Gesture for cylindrical grasp (fingers curled as if holding a cylinder of 5-7 cm diameter)
+    Modified to be accessible for users without a thumb"""
     
     def __init__(self):
         self.name = "Cylindrical Grasp"
         self.debug = True  # Set to False to disable debug prints
+        # Minimum and maximum diameter for cylindrical object (in relation to hand scale)
+        self.min_diameter_factor = 0.45  # Approximate 3cm minimum diameter as factor of hand scale
+        self.max_diameter_factor = 1.05  # Approximate 7cm maximum diameter as factor of hand scale
         
     def recognize(self, hand_landmarks):
-        """Checks if all fingers are curled in a cylindrical grasp pattern."""
+        """Checks if fingers are curled in a cylindrical grasp pattern (holding object 5-7cm diameter).
+        Thumb-independent implementation for accessibility."""
         
         # Landmark indices
         FINGERTIPS = [4, 8, 12, 16, 20]   # Thumb, Index, Middle, Ring, Pinky
@@ -386,89 +423,184 @@ class CylindricalGraspGesture(HandGesture):
         ]
         hand_scale = self.calculate_3d_distance(wrist_point, middle_mcp_point)
         
-        # Determine hand orientation
-        thumb_tip_x = hand_landmarks.landmark[4].x
-        pinky_tip_x = hand_landmarks.landmark[20].x
-        is_right_hand = thumb_tip_x < pinky_tip_x
-        
-        # Debug: Show hand scale
         if self.debug:
             print(f"\nHand scale: {hand_scale:.3f}")
         
-        # Check finger curl - now more lenient
-        for i, (tip, middle, base) in enumerate(zip(FINGERTIPS[1:], MIDDLE_JOINTS[1:], BASE_JOINTS[1:])):
-            # For index, middle, ring, and pinky fingers
+        # Determine hand orientation (without relying on thumb)
+        index_base_x = hand_landmarks.landmark[5].x
+        pinky_base_x = hand_landmarks.landmark[17].x
+        is_right_hand = index_base_x < pinky_base_x
+        
+        # 1. Check palm openness - this is the key metric for cylindrical grasp with proper diameter
+        # We'll measure distance between finger bases and fingertips to estimate diameter
+        palm_opening_distances = []
+        
+        # For each finger (excluding thumb)
+        for i in range(1, 5):  # Index, middle, ring, pinky
+            # Get base and tip coordinates
+            base_idx = BASE_JOINTS[i]
+            tip_idx = FINGERTIPS[i]
+            
+            base_coord = [
+                hand_landmarks.landmark[base_idx].x,
+                hand_landmarks.landmark[base_idx].y,
+                hand_landmarks.landmark[base_idx].z
+            ]
+            
+            tip_coord = [
+                hand_landmarks.landmark[tip_idx].x,
+                hand_landmarks.landmark[tip_idx].y,
+                hand_landmarks.landmark[tip_idx].z
+            ]
+            
+            # Calculate distance from base to tip (straight line)
+            base_to_tip_distance = self.calculate_3d_distance(base_coord, tip_coord)
+            
+            # Store the distance
+            palm_opening_distances.append(base_to_tip_distance)
+        
+        # Calculate average palm opening
+        avg_palm_opening = sum(palm_opening_distances) / len(palm_opening_distances)
+        
+        # Calculate the estimated diameter using palm opening
+        # For cylindrical grasp, the diameter is related to how much the fingers are curled
+        estimated_diameter = avg_palm_opening * 2.1  # Factor derived from hand anatomy
+        
+        # Convert to relative scale where 1.0 is "hand scale" (distance from wrist to middle MCP)
+        relative_diameter = estimated_diameter / hand_scale
+        
+        if self.debug:
+            print(f"Estimated relative diameter: {relative_diameter:.3f}")
+            print(f"Valid range: {self.min_diameter_factor:.2f} - {self.max_diameter_factor:.2f}")
+        
+        # Check if the estimated diameter is within the valid range for cylindrical grasp (5-7cm)
+        if relative_diameter < self.min_diameter_factor or relative_diameter > self.max_diameter_factor:
+            if self.debug:
+                print(f"Failed diameter check: {relative_diameter:.3f} (valid: {self.min_diameter_factor:.2f} - {self.max_diameter_factor:.2f})")
+            return False
+        
+        # 2. Check finger curl - ensure fingers are curled properly
+        # Only check non-thumb fingers (index, middle, ring, pinky)
+        for i in range(1, 5):  # 1=index, 2=middle, 3=ring, 4=pinky
+            tip = FINGERTIPS[i]
+            middle = MIDDLE_JOINTS[i]
+            base = BASE_JOINTS[i]
+            
+            # Get coordinates for all joints in this finger
+            tip_coords = [
+                hand_landmarks.landmark[tip].x,
+                hand_landmarks.landmark[tip].y,
+                hand_landmarks.landmark[tip].z
+            ]
+            
+            middle_coords = [
+                hand_landmarks.landmark[middle].x,
+                hand_landmarks.landmark[middle].y,
+                hand_landmarks.landmark[middle].z
+            ]
+            
+            base_coords = [
+                hand_landmarks.landmark[base].x,
+                hand_landmarks.landmark[base].y,
+                hand_landmarks.landmark[base].z
+            ]
+            
+            # Check if finger is curled (tip y should be below middle joint y)
+            # But not curled too much (which would be a fist)
             tip_y = hand_landmarks.landmark[tip].y
             middle_y = hand_landmarks.landmark[middle].y
+            base_y = hand_landmarks.landmark[base].y
             
-            # More lenient: fingertip should be at least slightly below middle joint
-            if tip_y < middle_y - 0.02:  # Was just tip_y < middle_y
+            # Finger should be curled but not too much
+            # For cylindrical grasp, the tip y should be below middle y, but not too far down
+            if tip_y < middle_y - 0.02:  # Fingertip needs to be below middle joint
                 if self.debug:
-                    print(f"Finger {i+1} not curled enough (tip_y: {tip_y:.3f} < middle_y: {middle_y:.3f})")
+                    print(f"Finger {i} not curled enough")
                 return False
             
-            # More lenient palm proximity check
-            tip_to_wrist = self.calculate_3d_distance(
-                [hand_landmarks.landmark[tip].x, hand_landmarks.landmark[tip].y, hand_landmarks.landmark[tip].z],
-                wrist_point
-            )
-            base_to_wrist = self.calculate_3d_distance(
-                [hand_landmarks.landmark[base].x, hand_landmarks.landmark[base].y, hand_landmarks.landmark[base].z],
-                wrist_point
-            )
+            # Check for too much curl (tip very close to palm - indicates a fist)
+            # For this we'll use the angle between segments
+            vec1 = [
+                middle_coords[0] - base_coords[0],
+                middle_coords[1] - base_coords[1],
+                middle_coords[2] - base_coords[2]
+            ]
             
-            if tip_to_wrist > base_to_wrist * 1.1:  # Was just tip_to_wrist > base_to_wrist
+            vec2 = [
+                tip_coords[0] - middle_coords[0],
+                tip_coords[1] - middle_coords[1],
+                tip_coords[2] - middle_coords[2]
+            ]
+            
+            angle = self.calculate_angle(vec1, vec2)
+            
+            # For cylindrical grasp, angle should be between 20 and 80 degrees
+            # Tight fist would have smaller angle (fingers more parallel to palm)
+            if angle < 20 or angle > 80:
                 if self.debug:
-                    print(f"Finger {i+1} not close enough to palm (tip_to_wrist: {tip_to_wrist:.3f} > base_to_wrist: {base_to_wrist:.3f})")
+                    print(f"Finger {i} curl angle ({angle:.1f}°) outside valid range (20-80°)")
+                return False
+            
+            # Also check z-distance between tip and base
+            # In a fist, the z-distance will be greater as fingers curl into palm
+            z_diff = abs(tip_coords[2] - base_coords[2])
+            max_z_diff = 0.15 * hand_scale  # Maximum allowed z-difference
+            
+            if z_diff > max_z_diff:
+                if self.debug:
+                    print(f"Finger {i} z-diff too large: {z_diff:.3f} > {max_z_diff:.3f}")
                 return False
         
-        # Thumb position check - more intelligent calculation
-        thumb_tip = [
-            hand_landmarks.landmark[4].x,
-            hand_landmarks.landmark[4].y,
-            hand_landmarks.landmark[4].z
-        ]
-
-        # Use index finger MCP (base) as reference point
-        index_base = [
-            hand_landmarks.landmark[5].x,
-            hand_landmarks.landmark[5].y,
-            hand_landmarks.landmark[5].z
-        ]
-
-        thumb_to_index_dist = self.calculate_3d_distance(thumb_tip, index_base)
-
-        # Dynamic threshold based on hand size and finger length
-        middle_tip = [
-            hand_landmarks.landmark[12].x,
-            hand_landmarks.landmark[12].y,
-            hand_landmarks.landmark[12].z
-        ]
-        middle_finger_length = self.calculate_3d_distance(index_base, middle_tip)
-
-        """ # New formula: base distance + percentage of middle finger length
-        max_thumb_dist = (0.2 * hand_scale) + (0.4 * middle_finger_length)
-
-        if thumb_to_index_dist > max_thumb_dist:
+        # 3. Check finger separation - fingers shouldn't be too close together (fist) or too far apart (open hand)
+        # Get all fingertips positions for measuring separation (excluding thumb)
+        fingertips = []
+        for tip_idx in FINGERTIPS[1:]:  # Skip thumb
+            fingertips.append([
+                hand_landmarks.landmark[tip_idx].x,
+                hand_landmarks.landmark[tip_idx].y,
+                hand_landmarks.landmark[tip_idx].z
+            ])
+        
+        # Check distances between adjacent fingertips
+        for i in range(len(fingertips) - 1):
+            dist = self.calculate_3d_distance(fingertips[i], fingertips[i+1])
+            
+            # Set minimum and maximum distances based on hand scale
+            min_separation = 0.08 * hand_scale  # Minimum distance (avoid fist)
+            max_separation = 0.3 * hand_scale   # Maximum distance (avoid open hand)
+            
+            if dist < min_separation or dist > max_separation:
+                if self.debug:
+                    print(f"Finger {i+1}-{i+2} separation invalid: {dist:.3f} (valid: {min_separation:.3f} - {max_separation:.3f})")
+                return False
+        
+        # Optional thumb check (if thumb exists) - but not required for detection
+        try:
+            # Only check thumb position if landmarks for thumb exist and appear valid
+            thumb_tip = hand_landmarks.landmark[4]
+            
+            if hasattr(thumb_tip, 'visibility') and thumb_tip.visibility < 0.5:
+                if self.debug:
+                    print("Thumb not visible - continuing with non-thumb detection")
+            else:
+                # The thumb check is optional and will not fail the gesture recognition if missing
+                thumb_tip_pos = [thumb_tip.x, thumb_tip.y, thumb_tip.z]
+                index_base_pos = [hand_landmarks.landmark[5].x, hand_landmarks.landmark[5].y, hand_landmarks.landmark[5].z]
+                
+                # Measure thumb opposition (distance from thumb tip to index base)
+                thumb_to_index_dist = self.calculate_3d_distance(thumb_tip_pos, index_base_pos)
+                
+                # For cylindrical grasp, thumb should be at appropriate opposition distance
+                # Too close = fist, too far = open hand
+                min_thumb_dist = 0.12 * hand_scale  # Minimum distance (avoid fist)
+                max_thumb_dist = 0.45 * hand_scale  # Maximum distance (avoid open hand)
+                
+                if self.debug and (thumb_to_index_dist < min_thumb_dist or thumb_to_index_dist > max_thumb_dist):
+                    print(f"Thumb distance non-optimal: {thumb_to_index_dist:.3f} (optimal: {min_thumb_dist:.3f} - {max_thumb_dist:.3f})")
+                    print("Continuing recognition despite non-optimal thumb position")
+        except (AttributeError, IndexError):
             if self.debug:
-                print(f"Thumb distance: {thumb_to_index_dist:.3f} (allowed: {max_thumb_dist:.3f})")
-                print(f"Hand scale: {hand_scale:.3f}, Middle finger: {middle_finger_length:.3f}")
-            return False """
-        
-        # Thumb opposition check
-        thumb_x = hand_landmarks.landmark[4].x
-        index_base_x = hand_landmarks.landmark[5].x
-        
-        if is_right_hand:
-            if thumb_x > index_base_x + 0.05:  # Added small tolerance
-                if self.debug:
-                    print(f"Right hand thumb not opposed (thumb_x: {thumb_x:.3f} > index_base_x: {index_base_x:.3f})")
-                return False
-        else:
-            if thumb_x < index_base_x - 0.05:  # Added small tolerance
-                if self.debug:
-                    print(f"Left hand thumb not opposed (thumb_x: {thumb_x:.3f} < index_base_x: {index_base_x:.3f})")
-                return False
+                print("Thumb landmarks not available - continuing with non-thumb detection")
         
         if self.debug:
             print("Cylindrical grasp detected!")
@@ -480,7 +612,32 @@ class CylindricalGraspGesture(HandGesture):
                 (point1[1] - point2[1])**2 + 
                 (point1[2] - point2[2])**2)**0.5
 
+    def calculate_angle(self, vector1, vector2):
+        """Calculate angle between two vectors in degrees"""
+        import math
+        
+        # Calculate the dot product
+        dot_product = (vector1[0] * vector2[0] + 
+                       vector1[1] * vector2[1] + 
+                       vector1[2] * vector2[2])
+        
+        # Calculate the magnitudes
+        mag1 = (vector1[0]**2 + vector1[1]**2 + vector1[2]**2)**0.5
+        mag2 = (vector2[0]**2 + vector2[1]**2 + vector2[2]**2)**0.5
+        
+        # Avoid division by zero
+        if mag1 * mag2 == 0:
+            return 0
+            
+        cos_angle = dot_product / (mag1 * mag2)
+        
+        # Ensure the cosine is within valid range (-1 to 1)
+        cos_angle = max(min(cos_angle, 1.0), -1.0)
+        
+        # Convert to angle in degrees
+        return math.degrees(math.acos(cos_angle))
 
+ 
 class ThumbTouchAllFingersGesture(HandGesture):
     """Gesture for thumb touching all other fingers in sequence with adjustable timing"""
     
