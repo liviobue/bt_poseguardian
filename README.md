@@ -112,3 +112,13 @@ All gesture data and exercise performance metrics are stored in MongoDB for:
 - Performance analytics
 - Research and rehabilitation insights
 - Historical comparison and improvement tracking
+
+## Screenshots
+
+![CylindricalGraspGesture](pictures/grasp.png)
+
+![Sequential Thumb-to-Finger opposition Task](pictures/thumb.gif)
+
+![MLLM Upload 1](pictures/upload1.png)
+
+![MLLM Upload 2](pictures/upload2.png)
