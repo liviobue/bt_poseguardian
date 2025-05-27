@@ -62,6 +62,7 @@ bt_poseguardian/
 ├── .gitignore                  # Git ignore patterns
 ├── pictures/                   # Screenshots and documentation images
 └── rehab-frontend/             # React frontend application
+└── metrics/                    # Python script to evaluate results
 ```
 
 ## 🚀 Getting Started with Docker
