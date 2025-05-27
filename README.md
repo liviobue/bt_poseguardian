@@ -4,6 +4,18 @@
 
 **bt_poseguardian** is a full-stack real-time gesture recognition system for tracking hand gestures and exercises using webcam input. It's ideal for physical rehabilitation, gesture interfaces, and movement tracking with advanced AI-powered analysis capabilities.
 
+## 📋 Table of Contents
+
+- [Features](#-features)
+- [Tech Stack](#-tech-stack)
+- [Project Structure](#-project-structure)
+- [Getting Started](#-getting-started-with-docker)
+- [Exercise Recognition](#-exercise-recognition-details)
+- [AI Analysis Features](#-ai-analysis-features)
+- [Development](#-development)
+- [Data Collection](#-data-collection)
+- [Screenshots](#screenshots)
+
 ## 💡 Features
 
 ### Core Functionality
@@ -25,12 +37,32 @@ The system can recognize and track three specific exercises using heuristic mode
 - **Comparative Assessment**: Side-by-side analysis of video footage and extracted pose data
 
 ## 🛠 Tech Stack
-- **Backend**: Python, FastAPI, OpenCV, MediaPipe
-- **Frontend**: React
-- **Database**: MongoDB
-- **AI Integration**: Google API, Multimodal LLMs
-- **Computer Vision**: MediaPipe, OpenCV
-- **Deployment**: Docker, Docker Compose
+
+| Component | Technology |
+|-----------|------------|
+| **Backend** | Python, FastAPI, OpenCV, MediaPipe |
+| **Frontend** | React |
+| **Database** | MongoDB |
+| **AI Integration** | Google API, Multimodal LLMs |
+| **Computer Vision** | MediaPipe, OpenCV |
+| **Deployment** | Docker, Docker Compose |
+
+## 📁 Project Structure
+
+```
+bt_poseguardian/
+├── backend_with_cam_DEBUG.py    # Main backend application with camera debugging
+├── main.py                      # Primary application entry point
+├── gestures.py                  # Gesture recognition logic and models
+├── config.py                    # Configuration management
+├── requirements.txt             # Python dependencies
+├── Dockerfile                   # Docker container configuration
+├── docker-compose.yaml         # Multi-container orchestration
+├── .dockerignore               # Docker ignore patterns
+├── .gitignore                  # Git ignore patterns
+├── pictures/                   # Screenshots and documentation images
+└── rehab-frontend/             # React frontend application
+```
 
 ## 🚀 Getting Started with Docker
 
@@ -40,85 +72,116 @@ The system can recognize and track three specific exercises using heuristic mode
 - [Docker Compose](https://docs.docker.com/compose/) installed
 - Google API key for MLLM functionality
 
-### 📁 Example `.env` file
+### 📁 Environment Configuration
 
-Create a `.env` file in the root of your project and add (not committed to Git):
+Create a `.env` file in the root of your project:
 
 ```env
 GOOGLE_API_KEY=your_google_api_key_here
 MONGO_URI=your_mongo_uri_here
 ```
 
-And please edit the env variables in the docker-compose.yaml file.
+> **Note**: The `.env` file is not committed to Git for security reasons. Also update environment variables in the `docker-compose.yaml` file.
 
-### 🛠 Build Docker Images Locally
+### 🛠 Build and Run
 
-To build the Docker images for both the backend and frontend locally, run:
+1. **Build Docker Images Locally**
+   ```bash
+   docker-compose build
+   ```
 
-```bash
-docker-compose build
-```
+2. **Start the Application**
+   ```bash
+   docker-compose up
+   ```
 
-### ▶️ Run the Application  
+3. **Access the Application**
+   - **Backend**: http://localhost:8000
+   - **Frontend**: http://localhost:80
 
-Run this command to start the application:
-
-```bash  
-docker-compose up  
-```
-
-This will start:
-- **Backend**: http://localhost:8000
-- **Frontend**: http://localhost:80
-
-### 🛑 Stop the App
-Press Ctrl+C in your terminal, then:
-
-```bash
-docker-compose down
-```
+4. **Stop the Application**
+   ```bash
+   # Press Ctrl+C in terminal, then:
+   docker-compose down
+   ```
 
 ## 🎯 Exercise Recognition Details
 
 ### OpenHand Pose
-Detects when the hand is in an open, relaxed position with fingers extended. Useful for rehabilitation exercises focusing on hand opening and extension.
+- **Purpose**: Detects when the hand is in an open, relaxed position with fingers extended
+- **Use Case**: Rehabilitation exercises focusing on hand opening and extension
+- **Metrics**: Hand openness percentage, finger extension angles
 
 ### Sequential Thumb-to-Finger Opposition Task
-Tracks the sequential touching of thumb to each finger (index, middle, ring, pinky). This is commonly used in neurological assessments and fine motor skill rehabilitation.
+- **Purpose**: Tracks the sequential touching of thumb to each finger (index, middle, ring, pinky)
+- **Use Case**: Neurological assessments and fine motor skill rehabilitation
+- **Metrics**: Sequence accuracy, timing between touches, completion rate
 
 ### Cylindrical Grasp
-Recognizes when the hand forms a cylindrical grasp pattern, simulating holding objects like bottles or cans. Important for assessing grip strength and coordination.
+- **Purpose**: Recognizes when the hand forms a cylindrical grasp pattern
+- **Use Case**: Simulating holding objects like bottles or cans, assessing grip strength
+- **Metrics**: Grip formation quality, hand positioning accuracy
 
 ## 🤖 AI Analysis Features
 
 The system leverages Google's Multimodal Large Language Models to provide:
-- Comparative analysis between raw video and extracted keypoint data
-- Detailed movement quality assessment
-- Real-time feedback on exercise performance
-- Advanced pattern recognition beyond traditional computer vision
+
+| Feature | Description |
+|---------|-------------|
+| **Comparative Analysis** | Side-by-side comparison of raw video and extracted keypoint data |
+| **Movement Quality Assessment** | Detailed analysis of exercise performance quality |
+| **Real-time Feedback** | Instant feedback on exercise execution |
 
 ## 🔧 Development
 
-For local development without Docker, ensure you have:
+### Local Development Setup (without Docker)
+
+**Prerequisites:**
 - Python 3.10+
 - Node.js 18+
 - MongoDB (Cloud) Access
 - Valid Google API credentials
 
+**Backend Setup:**
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+**Frontend Setup:**
+```bash
+cd rehab-frontend
+npm install
+npm start
+```
+
+### Camera Configuration
+
+The system automatically detects available cameras. 
+
 ## 📊 Data Collection
 
-All gesture data and exercise performance metrics are stored in MongoDB for:
-- Progress tracking over time
-- Performance analytics
-- Research and rehabilitation insights
-- Historical comparison and improvement tracking
+All gesture data and exercise performance metrics can be stored in MongoDB for:
+
+- **Progress Tracking**: Monitor improvement over time
+- **Performance Analytics**: Detailed statistical analysis
+- **Research Insights**: Data for rehabilitation research
+- **Historical Comparison**: Track long-term progress trends
 
 ## Screenshots
 
+### Gesture Recognition Examples
+
 ![CylindricalGraspGesture](pictures/grasp.png)
+*Cylindrical Grasp Recognition*
 
 ![Sequential Thumb-to-Finger opposition Task](pictures/thumb.gif)
+*Sequential Thumb-to-Finger Opposition Task*
+
+### AI Analysis Interface
 
 ![MLLM Upload 1](pictures/upload1.png)
+*MLLM Analysis Upload Interface*
 
 ![MLLM Upload 2](pictures/upload2.png)
+*Comparative Analysis Results*
